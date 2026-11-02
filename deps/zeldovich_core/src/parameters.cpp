@@ -51,6 +51,7 @@ void ZeldovichParameters::set_defaults(void) {
     qPLTrescale  = 0;                       // Legal default
     PLT_target_z = 0.;                      // Legal default, probably don't want!
     f_NL         = 0.;     // Legal default; no primordial non-Gaussianity
+    for (int i = 0; i < 4; i++) f_NL_shape[i] = 0.;  // Legal default; no kernel shapes
     k_cutoff     = 1.;     // Legal default (corresponds to k_nyquist)
     ICFormat = "";  // Illegal default
     AllowDirectIO = 0;     // Legal default for most cases
@@ -121,6 +122,10 @@ void ZeldovichParameters::register_vars(void) {
     installscalar("ZD_PLT_target_z", PLT_target_z, DONT_CARE);
     installscalar("ZD_k_cutoff", k_cutoff, DONT_CARE);
     installscalar("ZD_f_NL", f_NL, DONT_CARE);
+    installscalar("ZD_f_NL_local", f_NL_shape[0], DONT_CARE);
+    installscalar("ZD_f_NL_equil", f_NL_shape[1], DONT_CARE);
+    installscalar("ZD_f_NL_orthoCMB", f_NL_shape[2], DONT_CARE);
+    installscalar("ZD_f_NL_orthoLSS", f_NL_shape[3], DONT_CARE);
     installscalar("ZD_n_s", n_s, DONT_CARE);
     installscalar("Omega_M", Omega_M, DONT_CARE);
     installscalar("ICFormat", ICFormat, MUST_DEFINE);

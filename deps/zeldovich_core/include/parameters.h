@@ -66,6 +66,7 @@ public:
     double PLT_target_z;  // The target redshift for the PLT rescaling
 
     double f_NL;     // phi^2(x) prefactor for local primordial non-Gaussianity
+    double f_NL_shape[4];  // ZD_f_NL_local/equil/orthoCMB/orthoLSS: nonzero = load that kernel shape
     double n_s;      // Spectral index of the primordial power (only used for f_NL)
     double Omega_M;  // Omega_M at z=0 (only used for f_NL)
 

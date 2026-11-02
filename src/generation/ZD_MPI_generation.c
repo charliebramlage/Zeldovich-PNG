@@ -346,52 +346,19 @@ if (dump_buf == NULL) {
 #endif
 
 #if LOAD_D_FROM_FILE
-
-    // Whitened w_NG for this y, same directory as the kernel. Keyed by y only.
-    FILE *phi_divided_fp = NULL;
-    {
-        char phi_divided_filename[1024];
-        snprintf(phi_divided_filename, sizeof(phi_divided_filename), "%s/phi_divided_y.%d", png_dir, global_y);
-        phi_divided_fp = fopen(phi_divided_filename, "wb");
-        if (phi_divided_fp == NULL) {
-            fprintf(stderr, "ERROR: Could not open %s for writing divided phi\n", phi_divided_filename);
-        }
-        fflush(stderr);
-    }
-    // Same layout as the Phi_gaussian dump: interleaved (real, imag), x fastest, then z.
-    double *divided_buf = (double*)malloc((size_t)N * (size_t)N * 2 * sizeof(double));
-    if (divided_buf == NULL) {
-        fprintf(stderr, "ERROR: Could not allocate phi_divided buffer\n");
-    }
-
-
-    double *loaded_kernel_real = (double*)malloc((size_t)N * (size_t)N * sizeof(double));
-    double *loaded_kernel_imag = (double*)malloc((size_t)N * (size_t)N * sizeof(double));
-        {
-        char load_filename[1024];
-        snprintf(load_filename, sizeof(load_filename), "%s/kernel_y.%d", png_dir, global_y);
-        FILE *load_fp = fopen(load_filename, "rb");
-        if (load_fp == NULL) {
-            fprintf(stderr, "ERROR: Could not open %s for reading phi", load_filename);
-        } else {
-            // File holds N*N interleaved (real, imag) doubles, x fastest then z,
-            // so element i is already at index z*N + x.
-            size_t nvals = (size_t)N * (size_t)N;
-            double *tmp = (double*)malloc(nvals * 2 * sizeof(double));
-            size_t nread = (tmp != NULL) ? fread(tmp, 2 * sizeof(double), nvals, load_fp) : 0;
-            if (nread != nvals) {
-                fprintf(stderr, "ERROR: short read in %s (got %zu/%zu complex values)\n",
-                        load_filename, nread, nvals);
-            }
-            if (tmp != NULL) {
-                for (size_t i = 0; i < nread; i++) {
-                    loaded_kernel_real[i] = tmp[2*i];
-                    loaded_kernel_imag[i] = tmp[2*i + 1];
-                }
-                free(tmp);
-            }
-            fclose(load_fp);
-        }
+    // Charlie: every f_NL shape enabled in the .par (nonzero ZD_f_NL_<shape>) is handled in one run.
+    // The z-loop only stores phi_G * s and s, with s = (5/3)/sqrt(P_primordial(k)) (0 on masked modes).
+    // After the z-loop each shape is done in turn, reusing one buffer:
+    //     kernel_<shape>_y.{y}  ->  (phi_G + f_NL*kernel) * s  ->  phi_<shape>_divided_y.{y}
+    // so memory does not grow with the number of shapes. D stays Gaussian in this run.
+    // All buffers: interleaved (real, imag), x fastest, then z, as in the Phi_gaussian dump.
+    static const char *fnl_shape_names[4] = {"local", "equil", "orthoCMB", "orthoLSS"};
+    size_t nmodes = (size_t)N * (size_t)N;
+    double *phiG_scaled = (double*)malloc(nmodes * 2 * sizeof(double));  // phi_G * s
+    double *ng_scale    = (double*)malloc(nmodes * sizeof(double));      // s
+    double *shape_buf   = (double*)malloc(nmodes * 2 * sizeof(double));  // kernel in, divided phi out
+    if (phiG_scaled == NULL || ng_scale == NULL || shape_buf == NULL) {
+        fprintf(stderr, "ERROR: Could not allocate phi_divided buffers\n");
     }
 #endif
 
@@ -530,12 +497,12 @@ if (dump_buf == NULL) {
             int abs_kx = (kx < 0) ? -kx : kx;
             int is_nyquist = (abs_kx == Nhalf || abs_ky == Nhalf || abs_kz == Nhalf);
             
-            // Charlie: DC, Nyquist, and k_cutoff (corner) modes; also reused to mask the non-Gaussian field below
+            // DC, Nyquist, and k_cutoff (corner) modes; also reused to mask the non-Gaussian field below
             int zeroed_mode = (k2 == 0.0) || is_nyquist || (!CornerModes && (double)k2_int >= k2_cutoff);
 
             fftw_complex D;
             fftw_complex phi_G;
-                if (zeroed_mode) { //Charlie:handles skipping DC mode (k=0) and Nyquist modes (k=kmax) for all three axes (and does it to keep the random number generator in sync with the serial version)
+                if (zeroed_mode) { //handles skipping DC mode (k=0) and Nyquist modes (k=kmax) for all three axes (and does it to keep the random number generator in sync with the serial version)
                     D[0] = D[1] = 0.0;
                     phi_G[0] = phi_G[1] = 0.0;
                     nskip++;
@@ -587,7 +554,7 @@ if (dump_buf == NULL) {
                         if (kmag > 0.0) {
                             double P_density    = zeldovich_ps_power(ps_handle, kmag); //Charlie: calculates the power spectrum
 
-                            // CHANGED: P_primordial now comes from its own independently-
+                            // P_primordial comes from its own independently-
                             // loaded file/spline/handle (class_pk_primordial_dimensional.dat),
                             // evaluated with the same zeldovich_ps_power() call used for
                             // P_density above -- not inferred from ps_handle's shape.
@@ -604,7 +571,7 @@ if (dump_buf == NULL) {
                         }
                     }
                 }
-                else { //charlie: I added this 
+                else { 
                     fprintf(stderr, "ERROR: ps_handle or params_handle is NULL for a mode "
                                     "that requires random generation (x=%d, y=%d, z=%d, k2=%g). "
                                     "This should never happen — check caller setup.\n",
@@ -615,7 +582,7 @@ if (dump_buf == NULL) {
                 }
 
 
-                //Charlie: My code insertion to dump the density field D to a file
+                //Dump the gaussian phi into files
                  #if DUMP_GAUSSIAN_D
                 //Transform D into Phi (D itself is left untouched for downstream use)
                 // Store into the slice buffer at [z*N + x]; written to disk after the z-loop.
@@ -637,74 +604,28 @@ if (dump_buf == NULL) {
                     }  
                 #endif
 
-            fftw_complex kernel;
-            fftw_complex phi_NG;
-            fftw_complex NG_rand; //charlie: variable for the "random" numbers produced by the non-gaussian phi(k)
             #if LOAD_D_FROM_FILE
-                kernel[0] = (real_t)loaded_kernel_real[(int64_t)x + z * N]; //Charlie: this is inside x and z loops
-                kernel[1] = (real_t)loaded_kernel_imag[(int64_t)x + z * N];
-                phi_NG[0] = phi_G[0]+ f_NL*kernel[0]; 
-                phi_NG[1] = phi_G[1]+f_NL*kernel[1]; 
-                if (zeroed_mode) { // Charlie: apply the same DC/Nyquist/k_cutoff mask to the non-Gaussian phi (phi^2 has power outside the sphere)
-                    phi_NG[0] = phi_NG[1] = 0.0;
-                }
-
-                // Charlie: divide loaded D by sqrt(P_primordial(k)), where P_primordial(k)
-                // is read from class_pk_primordial_dimensional.dat via
-                // ps_handle_primordial_dimensional (same file/spline used in the main
-                // P_density/P_primordial ratio above -- not the analytic k^n_s inference).
-                // Uses the same k2_phys/kmag convention as the cgauss branch below
-                // (k2 * fundamental^2), so kmag is in the same physical units.
-                // k=0 (DC mode) is left untouched (P_primordial stays 0.0 there,
-                // which would otherwise divide by zero).
-                NG_rand[0] = NG_rand[1] = 0.0;
-                if (ps_handle != NULL) {
-                    double k2_phys = k2 * fundamental * fundamental;
-                    double kmag = sqrt(k2_phys);
-                    double P_primordial = 0.0;
-                    if (ps_handle_primordial_dimensional != NULL) {
-                        P_primordial = zeldovich_ps_power(ps_handle_primordial_dimensional, kmag);
+                // Charlie: s = (5/3)/sqrt(P_primordial(k)) turns phi_NG back into random numbers.
+                // P_primordial(k) is read from class_pk_primordial_dimensional.dat via
+                // ps_handle_primordial_dimensional, with the same k2_phys/kmag convention as the
+                // cgauss branch above. s = 0 applies the DC/Nyquist/k_cutoff mask to the
+                // non-Gaussian phi (phi^2 has power outside the sphere) and covers P_primordial <= 0.
+                // The kernel shapes are added after the z-loop.
+                {
+                    double s = 0.0;
+                    if (!zeroed_mode && ps_handle != NULL && ps_handle_primordial_dimensional != NULL) {
+                        double k2_phys = k2 * fundamental * fundamental;
+                        double kmag = sqrt(k2_phys);
+                        double P_primordial = zeldovich_ps_power(ps_handle_primordial_dimensional, kmag);
+                        if (P_primordial > 0.0) s = (5.0/3.0) / sqrt(P_primordial);
                     }
-                    if (P_primordial > 0.0) {
-                        double sqrt_P_primordial = sqrt(P_primordial);
-                        NG_rand[0] = (real_t)(double)phi_NG[0]*((5.0/3.0)/ sqrt_P_primordial); //This is turning phi_non-Gaussian back into random numbers
-                        NG_rand[1] = (real_t)(double)phi_NG[1]*((5.0/3.0)/ sqrt_P_primordial);
+                    size_t i = (size_t)z * (size_t)N + (size_t)x;
+                    if (ng_scale != NULL) ng_scale[i] = s;
+                    if (phiG_scaled != NULL) {
+                        phiG_scaled[2 * i]     = (double)phi_G[0] * s;
+                        phiG_scaled[2 * i + 1] = (double)phi_G[1] * s;
                     }
                 }
-
-                // Charlie: store this mode's divided phi (phi_real, phi_imag) in the slice buffer at
-                // [z*N + x]; the whole slice is written to file after the z-loop (no indices stored).
-                if (divided_buf != NULL) {
-                    divided_buf[2 * ((size_t)z * (size_t)N + (size_t)x)]     = (double)NG_rand[0];
-                    divided_buf[2 * ((size_t)z * (size_t)N + (size_t)x) + 1] = (double)NG_rand[1];
-                }
-
-
-                //Charlie: Creating D from our random numbers (from phi)
-                double D_real, D_imag;
-                if (ps_handle != NULL) {
-                    double k2_phys = k2 * fundamental * fundamental;
-                    double kmag = sqrt(k2_phys);
-                    zeldovich_ps_inputted_ic(ps_handle, kmag, NG_rand[0], NG_rand[1], &D_real, &D_imag);
-                    D[0] = (real_t)D_real; 
-                    D[1] = (real_t)D_imag;
-                    }
-                
-
-                    // Charlie: debug print — check the same handful of modes as they're loaded
-                if (rank == 0 && global_y == 0 && x < 3 && z < 3) {
-                    fprintf(stderr, "[LOAD] (x=%d, y=%d, z=%d): D_real=%.15e, D_imag=%.15e\n",
-                            x, global_y, z, (double)D[0], (double)D[1]);
-                    //fprintf(stderr, "[KERNEL] (x=%d, y=%d, z=%d): kernel_real=%.15e, kernel_imag=%.15e\n",
-                    //        x, global_y, z, (double)kernel[0], (double)kernel[1]);        
-                    fflush(stderr);
-                }
-                if (rank == 0 && global_y == Nhalf - 1 && x < 3 && z < 3) {
-                        fprintf(stderr, "[LOAD] (x=%d, y=%d, z=%d): D_real=%.15e, D_imag=%.15e\n",
-                            x, global_y, z, (double)D[0], (double)D[1]);
-                        fflush(stderr);
-                    }
-            #else    
             #endif
 
             fftw_complex noise;
@@ -938,15 +859,58 @@ free(dump_buf);
 #endif
 
 #if LOAD_D_FROM_FILE
-if (phi_divided_fp != NULL && divided_buf != NULL) {
-    size_t nvals = (size_t)N * (size_t)N;
-    size_t nwritten = fwrite(divided_buf, 2 * sizeof(double), nvals, phi_divided_fp);
-    if (nwritten != nvals) {
-        fprintf(stderr, "ERROR: short write to phi_divided file (wrote %zu/%zu complex values)\n",
-                nwritten, nvals);
+// Charlie: one f_NL shape at a time, all through shape_buf:
+// divided = (phi_G + f_NL*kernel) * s = phiG_scaled + f_NL * s * kernel
+if (phiG_scaled != NULL && ng_scale != NULL && shape_buf != NULL) {
+    for (int shape = 0; shape < 4; shape++) {
+        if (params_handle == NULL || zeldovich_params_get_f_NL_shape(params_handle, shape) == 0.0) continue;
+
+        char kernel_filename[1024];
+        snprintf(kernel_filename, sizeof(kernel_filename), "%s/kernel_%s_y.%d",
+                 png_dir, fnl_shape_names[shape], global_y);
+        FILE *kernel_fp = fopen(kernel_filename, "rb");
+        if (kernel_fp == NULL) {
+            fprintf(stderr, "ERROR: Could not open %s for reading kernel; skipping shape %s\n",
+                    kernel_filename, fnl_shape_names[shape]);
+            fflush(stderr);
+            continue;
+        }
+        size_t nread = fread(shape_buf, 2 * sizeof(double), nmodes, kernel_fp);
+        fclose(kernel_fp);
+        if (nread != nmodes) {
+            fprintf(stderr, "ERROR: short read in %s (got %zu/%zu complex values); skipping shape %s\n",
+                    kernel_filename, nread, nmodes, fnl_shape_names[shape]);
+            fflush(stderr);
+            continue;
+        }
+
+        #pragma omp parallel for schedule(static)
+        for (size_t i = 0; i < nmodes; i++) {
+            double fs = f_NL * ng_scale[i];
+            shape_buf[2 * i]     = phiG_scaled[2 * i]     + fs * shape_buf[2 * i];
+            shape_buf[2 * i + 1] = phiG_scaled[2 * i + 1] + fs * shape_buf[2 * i + 1];
+        }
+
+        char divided_filename[1024];
+        snprintf(divided_filename, sizeof(divided_filename), "%s/phi_%s_divided_y.%d",
+                 png_dir, fnl_shape_names[shape], global_y);
+        FILE *divided_fp = fopen(divided_filename, "wb");
+        if (divided_fp == NULL) {
+            fprintf(stderr, "ERROR: Could not open %s for writing divided phi\n", divided_filename);
+            fflush(stderr);
+            continue;
+        }
+        size_t nwritten = fwrite(shape_buf, 2 * sizeof(double), nmodes, divided_fp);
+        if (fclose(divided_fp) != 0 || nwritten != nmodes) {
+            fprintf(stderr, "ERROR: short write to %s (wrote %zu/%zu complex values)\n",
+                    divided_filename, nwritten, nmodes);
+            fflush(stderr);
+        }
     }
 }
-free(divided_buf);
+free(phiG_scaled);
+free(ng_scale);
+free(shape_buf);
 #endif
 
 
@@ -1123,15 +1087,6 @@ free(divided_buf);
     // #endif
     
     // Clean up local macros
-    #if LOAD_D_FROM_FILE
-        free(loaded_kernel_real);
-        free(loaded_kernel_imag);
-        if (phi_divided_fp != NULL) {
-            fclose(phi_divided_fp);
-        }
-
-    #endif
-
     #if LOAD_WHITE_NOISE_FROM_FILE
         free(loaded_noise_real);
         free(loaded_noise_imag);

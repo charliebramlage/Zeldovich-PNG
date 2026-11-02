@@ -121,6 +121,10 @@ double zeldovich_params_get_k_cutoff(ParametersHandle params);
 // Returns: f_NL value (default 0.0, i.e. Gaussian)
 double zeldovich_params_get_f_NL(ParametersHandle params);
 
+// Get the f_NL shape flag i = 0..3 (ZD_f_NL_local, _equil, _orthoCMB, _orthoLSS).
+// Nonzero means kernel_<shape>_y.{y} is loaded. Returns 0.0 if unset or i is out of range.
+double zeldovich_params_get_f_NL_shape(ParametersHandle params, int i);
+
 // Get/set Pk_norm (radius, Mpc/h, at which sigmaR is evaluated for sigma8-style
 // normalization; if <= 0, that normalization branch is skipped entirely in
 // Normalize()). The setter exists so a secondary PowerSpectrum can be loaded

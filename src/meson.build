@@ -73,19 +73,20 @@ if not get_option('abacus_embed')
 
   # Kernel_MPI (f_NL kernels, C port of 1rank-run-cosm500/kernel_MPI.py): precision follows
   # -Ddouble_precision like Zeldovich_MPI. The regression test (1e-10 tolerance vs the
-  # float64 Python reference) is double only: tests/kernel_regression/build_kernel.sh.
+  # float64 Python reference) is double only: see the kernel_regression_quick test below.
   kernel_mpi_exe = executable(
     'Kernel_MPI',
     files(
       'kernel/kernel_grid.c',
       'kernel/kernel_io.c',
       'kernel/kernel_main.c',
+      'kernel/kernel_params.cpp',
       'kernel/kernel_pass.c',
       'kernel/kernel_terms.c',
     ),
     include_directories: include_directories('kernel'),
     link_with: zeldovich_ic_lib,
-    dependencies: zd_mpi_common_dep,
+    dependencies: [zd_mpi_common_dep, parseheader_dep],
     link_language: 'cpp',
     install: true,
   )

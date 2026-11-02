@@ -5,7 +5,7 @@
 
 ```
 Cosm500_1D_1rank/
-  cosm500_abacus_legacy_zeldovich.par2   # template (paths patched at run time)
+  cosm500_abacus_legacy_zeldovich.par2   # template (expanded to .runtime/param.par at run time)
   env.sh          # defaults + optional ENV_SCRIPT hook
   build.sh        # meson configure + compile
   run.sh          # wisdom preflight + mpiexec -n 1
@@ -14,7 +14,7 @@ Cosm500_1D_1rank/
   output/         # default IC output (override with IC_OUTPUT_DIR)
   bin_files/      # FFTW wisdom + rank scratch
   rng_logs/
-  .runtime/param.par2   # generated absolute-path par2 (gitignore if desired)
+  .runtime/param.par    # generated .par (GenParam if $ABACUS is set, else scripts/par2_to_par.py)
 ```
 
 ## Prerequisites

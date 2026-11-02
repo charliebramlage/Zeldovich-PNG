@@ -37,7 +37,9 @@ ZD_qdensity = 1
 NumZRanks = 1
 
 # Charlie: added to toggle which f_NL to compute
+# Every nonzero shape is computed in one run: Kernel_MPI writes kernel_<shape>_y.{y}, and
+# Zeldovich_MPI (LOAD_D_FROM_FILE) writes phi_<shape>_divided_y.{y}, all with amplitude ZD_f_NL
 ZD_f_NL_local = 1
-ZD_f_NL_equil = 0
-ZD_f_NL_orthoCMB = 0
+ZD_f_NL_equil = 1
+ZD_f_NL_orthoCMB = 1
 ZD_f_NL_orthoLSS = 0

@@ -3,26 +3,31 @@
  *
  * Reads the Gaussian potential y-slices dumped by Zeldovich_MPI (DUMP_GAUSSIAN_D),
  *     <PNG_DIR>/Phi_gaussian_y.{y}        y = 0 .. N/2
- * computes the f_NL kernel selected in the par2 file, and writes
- *     <OUT_DIR>/kernel_y.{y}              (default OUT_DIR = PNG_DIR)
+ * computes every f_NL kernel enabled in the .par file (nonzero ZD_f_NL_<shape>), one shape
+ * at a time reusing the same output buffers, and writes
+ *     <OUT_DIR>/kernel_<shape>_y.{y}      shape = local, equil, orthoCMB, orthoLSS
+ *                                         (default OUT_DIR = PNG_DIR)
  * for the LOAD_D_FROM_FILE run. Files are keyed by y only, so the rank count here need
  * not match the Zeldovich_MPI dump or load runs.
  *
- * Usage:  mpiexec -n R Kernel_MPI [param.par2] [--png-dir DIR] [--out-dir DIR] [--python-compat]
+ * Usage:  mpiexec -n R Kernel_MPI [param.par] [--png-dir DIR] [--out-dir DIR] [--python-compat]
  *
  *   --python-compat                  default M = 2N, as in kernel_MPI.py (same as KERNEL_PYTHON_COMPAT=1)
  *
- * Par2 keys:  BoxSize, NumZRanks, ZD_f_NL_local, ZD_f_NL_equil, ZD_f_NL_orthoCMB,
+ * Par keys:   BoxSize, NumZRanks, ZD_f_NL_local, ZD_f_NL_equil, ZD_f_NL_orthoCMB,
  *             ZD_f_NL_orthoLSS, optional ZD_PNG_DIR (default "png_slices"),
  *             optional KernelPadM (padded grid size M)
+ *             Read with ParseHeader (kernel_params.h); expand a .par2 to .par first, as Abacus
+ *             does (GenParam, or scripts/par2_to_par.py -- see 1rank-run-cosm500/run.sh).
  *
  * Environment:
- *   PARAM_FILE, PNG_DIR, OUT_DIR    override the par2 file / ZD_PNG_DIR / output dir (CLI args override these)
+ *   PARAM_FILE, PNG_DIR, OUT_DIR    override the .par file / ZD_PNG_DIR / output dir (CLI args override these)
  *   KERNEL_PYTHON_COMPAT=0 (default) default M = smallest valid M >= 3N/2 (alias-free, smaller)
  *                       =1           default M = 2N, as in kernel_MPI.py (or pass --python-compat)
  *   KERNEL_PAD_M=<M>                 explicit padded size (overrides KernelPadM and the default)
  *   KERNEL_ZERO_NYQUIST=1            zero the kx/ky/kz = N/2 modes of phi before the kernels
- *   KERNEL_ONLY_TERM=<A1|C1|...>     debug: run only this shape with coef 1 (output = J*Q)
+ *   KERNEL_ONLY_TERM=<A1|C1|...>     debug: run only this term with coef 1 (output = J*Q),
+ *                                    written to kernel_<term>_y.{y}
  *   KERNEL_FORCE_STAGED_A2A=1        test: always use the INT_MAX-safe staged Alltoallv path
  *
  * Precision follows precision.h (real_t / fftw_complex_t): single by default, double
@@ -31,7 +36,6 @@
  * Stages per kernel term: see kernel_pass.h.
  */
 
-#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -50,79 +54,9 @@
 
 #include "kernel_grid.h"
 #include "kernel_io.h"
+#include "kernel_params.h"
 #include "kernel_pass.h"
 #include "kernel_terms.h"
-
-// ====================================================================================
-// par2 parsing (port of parse_par2 in kernel_MPI.py: numeric keys + ZD_PNG_DIR)
-// ====================================================================================
-
-typedef struct {
-    double box_size;
-    double num_z_ranks;
-    double fnl[4];       // local, equil, orthoCMB, orthoLSS
-    double pad_M;        // KernelPadM, or -1
-    int found[7];        // BoxSize, NumZRanks, 4 x f_NL, KernelPadM
-    char png_dir[4096];  // ZD_PNG_DIR, or "png_slices"
-} KernelParams;
-
-static const char *param_keys[7] = {
-    "BoxSize", "NumZRanks", "ZD_f_NL_local", "ZD_f_NL_equil",
-    "ZD_f_NL_orthoCMB", "ZD_f_NL_orthoLSS", "KernelPadM"
-};
-
-static char *strip(char *s)
-{
-    while (isspace((unsigned char)*s)) s++;
-    char *e = s + strlen(s);
-    while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
-    return s;
-}
-
-static int parse_par2(const char *path, KernelParams *kp)
-{
-    FILE *fp = fopen(path, "r");
-    if (fp == NULL) return 1;
-    memset(kp, 0, sizeof(*kp));
-    kp->pad_M = -1.0;
-    snprintf(kp->png_dir, sizeof(kp->png_dir), "png_slices");
-
-    char line[4096];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *hash = strchr(line, '#');
-        if (hash) *hash = '\0';
-        char *eq = strchr(line, '=');
-        if (eq == NULL) continue;
-        *eq = '\0';
-        char *key = strip(line);
-        char *val = strip(eq + 1);
-        size_t vlen = strlen(val);
-        if (vlen >= 2 && (val[0] == '"' || val[0] == '\'') && val[vlen - 1] == val[0]) {
-            val[vlen - 1] = '\0';
-            val = strip(val + 1);
-        }
-
-        if (strcmp(key, "ZD_PNG_DIR") == 0) {
-            if (val[0] != '\0') snprintf(kp->png_dir, sizeof(kp->png_dir), "%s", val);
-            continue;
-        }
-        for (int i = 0; i < 7; i++) {
-            if (strcmp(key, param_keys[i]) != 0) continue;
-            char *end = NULL;
-            errno = 0;
-            double v = strtod(val, &end);
-            if (end == val || errno != 0) break;   // non-numeric: ignore, like the Python fallback
-            double *dst = (i == 0) ? &kp->box_size
-                        : (i == 1) ? &kp->num_z_ranks
-                        : (i == 6) ? &kp->pad_M
-                        : &kp->fnl[i - 2];
-            *dst = v;
-            kp->found[i] = 1;
-        }
-    }
-    fclose(fp);
-    return 0;
-}
 
 static int env_int(const char *name, int dflt)
 {
@@ -152,7 +86,7 @@ int main(int argc, char **argv)
     // ==================================================================================
     // Arguments / environment
     // ==================================================================================
-    const char *param_file = getenv("PARAM_FILE") ? getenv("PARAM_FILE") : ".runtime/param.par2";
+    const char *param_file = getenv("PARAM_FILE") ? getenv("PARAM_FILE") : ".runtime/param.par";
     const char *png_dir_arg = getenv("PNG_DIR");
     const char *out_dir_arg = getenv("OUT_DIR");
     int compat = env_int("KERNEL_PYTHON_COMPAT", 0);
@@ -181,7 +115,7 @@ int main(int argc, char **argv)
     memset(&kp, 0, sizeof(kp));
     int hdr[2] = {0, -1};   // parse status, N
     if (world_rank == 0) {
-        hdr[0] = parse_par2(param_file, &kp);
+        hdr[0] = kernel_params_load(param_file, &kp);
         if (png_dir_arg != NULL && png_dir_arg[0] != '\0') {
             snprintf(kp.png_dir, sizeof(kp.png_dir), "%s", png_dir_arg);
         }
@@ -215,27 +149,21 @@ int main(int argc, char **argv)
         fprintf(stderr, "[Kernel_MPI] WARNING: M=%d < 3N/2=%d: the quadratic product will alias\n", M, 3 * N / 2);
     }
 
-    // f_NL selection: kernel_MPI.py overwrites kernel_output block by block, so the last
-    // nonzero of (local, equil, orthoCMB, orthoLSS) wins
-    FnlType fnl = FNL_NONE;
-    int num_nonzero = 0;
+    // f_NL selection: every nonzero of (local, equil, orthoCMB, orthoLSS) is computed, one
+    // after another, each into its own kernel_<shape>_y.{y} files
+    FnlType active[4];
+    int num_active = 0;
     for (int i = 0; i < 4; i++) {
-        if (kp.fnl[i] != 0.0) { fnl = (FnlType)i; num_nonzero++; }
+        if (kp.fnl[i] != 0.0) active[num_active++] = (FnlType)i;
     }
-    if (fnl == FNL_NONE) FAIL("all of ZD_f_NL_local/equil/orthoCMB/orthoLSS are zero (or missing)\n");
-    if (num_nonzero > 1 && world_rank == 0) {
-        fprintf(stderr, "[Kernel_MPI] WARNING: %d f_NL types are nonzero; using %s (the last one, as kernel_MPI.py does)\n",
-                num_nonzero, fnl_type_name(fnl));
+    const int debug_term = (only_term != NULL && only_term[0] != '\0');
+    int only_id = -1;
+    if (debug_term) {
+        only_id = kernel_shape_from_name(only_term);
+        if (only_id < 0) FAIL("KERNEL_ONLY_TERM=%s is not a kernel shape name\n", only_term);
+        num_active = 1;   // one pass, terms set in the loop below
     }
-
-    KernelTerm terms[KERNEL_MAX_TERMS];
-    int num_terms = kernel_terms_for(fnl, terms);
-    if (only_term != NULL && only_term[0] != '\0') {
-        int id = kernel_shape_from_name(only_term);
-        if (id < 0) FAIL("KERNEL_ONLY_TERM=%s is not a kernel shape name\n", only_term);
-        terms[0] = (KernelTerm){(KernelShapeId)id, 1.0};
-        num_terms = 1;
-    }
+    if (num_active == 0) FAIL("all of ZD_f_NL_local/equil/orthoCMB/orthoLSS are zero (or missing)\n");
 
     // ==================================================================================
     // Topology (same Cartesian grid as Zeldovich_MPI) + layout
@@ -249,16 +177,25 @@ int main(int argc, char **argv)
 
     if (rank == 0) {
         printf("========================================================================\n");
-        printf("Kernel_MPI: f_NL %s (%d term%s)%s\n", fnl_type_name(fnl), num_terms, num_terms == 1 ? "" : "s",
-               (only_term && only_term[0]) ? " [KERNEL_ONLY_TERM]" : "");
+        printf("Kernel_MPI: %d f_NL shape%s%s\n", num_active, num_active == 1 ? "" : "s",
+               debug_term ? " [KERNEL_ONLY_TERM]" : "");
         printf("  N=%d  M=%d (padding %.3fx)  BoxSize=%g\n", N, M, (double)M / N, kp.box_size);
         printf("  ranks=%d (size_x=%d x size_z=%d), OMP threads/rank=%d\n",
                num_ranks, size_x, size_z, omp_get_max_threads());
         printf("  precision=%s, batches=%d, compat=%d, zero_nyquist=%d\n",
                PRECISION_NAME, K.num_batches, compat, zero_nyquist);
         printf("  in:  %s\n  out: %s\n", png_dir, out_dir);
-        for (int t = 0; t < num_terms; t++) {
-            printf("  term %d: %s  coef=% .17g\n", t, kernel_shape(terms[t].shape)->name, terms[t].coef);
+        if (debug_term) {
+            printf("  term: %s  coef=1\n", kernel_shape((KernelShapeId)only_id)->name);
+        } else {
+            for (int s = 0; s < num_active; s++) {
+                KernelTerm terms[KERNEL_MAX_TERMS];
+                int num_terms = kernel_terms_for(active[s], terms);
+                printf("  %s:\n", fnl_type_name(active[s]));
+                for (int t = 0; t < num_terms; t++) {
+                    printf("    term %d: %s  coef=% .17g\n", t, kernel_shape(terms[t].shape)->name, terms[t].coef);
+                }
+            }
         }
         printf("========================================================================\n");
         fflush(stdout);
@@ -284,8 +221,7 @@ int main(int argc, char **argv)
         if (y_p == 0 || y_p == N / 2) kernel_fix_self_conjugate_plane(N, phi[b]);
         if (zero_nyquist) kernel_zero_nyquist(N, y_p, phi[b]);
 
-        out[b] = kernel_alloc_complex(slice_elems, "output slice");
-        memset(out[b], 0, sizeof(fftw_complex_t) * (size_t)slice_elems);
+        out[b] = kernel_alloc_complex(slice_elems, "output slice");   // zeroed per shape below
     }
 
     // ==================================================================================
@@ -301,22 +237,6 @@ int main(int argc, char **argv)
         fflush(stdout);
     }
 
-    double t_terms = MPI_Wtime();
-    for (int t = 0; t < num_terms; t++) {
-        const KernelShape *shape = kernel_shape(terms[t].shape);
-        double t0 = MPI_Wtime();
-        run_kernel_term(&P, shape, terms[t].coef);
-        MPI_Barrier(zd_comm_2d);
-        if (rank == 0) {
-            printf("[Kernel_MPI] term %d/%d (%s) done in %.3f s\n", t + 1, num_terms, shape->name, MPI_Wtime() - t0);
-            fflush(stdout);
-        }
-    }
-    t_terms = MPI_Wtime() - t_terms;
-
-    // ==================================================================================
-    // Write output (rank r writes exactly the y_primary slices it read; files keyed by y)
-    // ==================================================================================
     if (rank == 0) {
         if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
             fprintf(stderr, "[Kernel_MPI] ERROR: cannot create %s\n", out_dir);
@@ -324,15 +244,58 @@ int main(int argc, char **argv)
         }
     }
     MPI_Barrier(zd_comm_2d);
-    for (int b = 0; b < K.my_num_pairs; b++) {
-        int y_p = kernel_batch_y_p(&K, rank, b);
-        char path[4096 + 64];
-        snprintf(path, sizeof(path), "%s/kernel_y.%d", out_dir, y_p);
-        if (kernel_write_slice(path, N, out[b]) != 0) {
-            fprintf(stderr, "[Kernel_MPI] ERROR: rank %d cannot write %s\n", rank, path);
-            MPI_Abort(MPI_COMM_WORLD, 1);
+
+    // One f_NL shape at a time: phi is read-only in run_kernel_term, so the same phi and
+    // out slices are reused for every shape and peak memory matches a single-shape run
+    double t_terms = MPI_Wtime();
+    for (int s = 0; s < num_active; s++) {
+        KernelTerm terms[KERNEL_MAX_TERMS];
+        int num_terms;
+        const char *label;
+        if (debug_term) {
+            terms[0] = (KernelTerm){(KernelShapeId)only_id, 1.0};
+            num_terms = 1;
+            label = kernel_shape((KernelShapeId)only_id)->name;
+        } else {
+            num_terms = kernel_terms_for(active[s], terms);
+            label = fnl_type_name(active[s]);
+        }
+
+        for (int b = 0; b < K.my_num_pairs; b++) {
+            memset(out[b], 0, sizeof(fftw_complex_t) * (size_t)slice_elems);
+        }
+
+        double t_shape = MPI_Wtime();
+        for (int t = 0; t < num_terms; t++) {
+            const KernelShape *shape = kernel_shape(terms[t].shape);
+            double t0 = MPI_Wtime();
+            run_kernel_term(&P, shape, terms[t].coef);
+            MPI_Barrier(zd_comm_2d);
+            if (rank == 0) {
+                printf("[Kernel_MPI] %s: term %d/%d (%s) done in %.3f s\n",
+                       label, t + 1, num_terms, shape->name, MPI_Wtime() - t0);
+                fflush(stdout);
+            }
+        }
+
+        // Rank r writes exactly the y_primary slices it read; files keyed by y
+        for (int b = 0; b < K.my_num_pairs; b++) {
+            int y_p = kernel_batch_y_p(&K, rank, b);
+            char path[4096 + 64];
+            snprintf(path, sizeof(path), "%s/kernel_%s_y.%d", out_dir, label, y_p);
+            if (kernel_write_slice(path, N, out[b]) != 0) {
+                fprintf(stderr, "[Kernel_MPI] ERROR: rank %d cannot write %s\n", rank, path);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+        }
+        MPI_Barrier(zd_comm_2d);
+        if (rank == 0) {
+            printf("[Kernel_MPI] shape %d/%d (%s) done in %.3f s -> %s/kernel_%s_y.*\n",
+                   s + 1, num_active, label, MPI_Wtime() - t_shape, out_dir, label);
+            fflush(stdout);
         }
     }
+    t_terms = MPI_Wtime() - t_terms;
 
     // ==================================================================================
     // Timing / memory summary (max over ranks)

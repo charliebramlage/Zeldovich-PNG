@@ -12,6 +12,11 @@
 #   export IC_OUTPUT_DIR=/path/to/output   # default: ./output
 #   export NTHREADS_PER_RANK=8
 #   export MPIEXEC_EXTRA="--bind-to core"  # optional
+#   export ABACUS=/path/to/abacus-public   # optional: use Abacus's GenParam for .par2 -> .par
+#
+# As in Abacus, the .par2 template is expanded into a plain .par (.runtime/param.par) and
+# the executables read that with ParseHeader. The expansion uses $ABACUS/Abacus/GenParam.py
+# when ABACUS is set, otherwise ../scripts/par2_to_par.py (same rules, no Abacus needed).
 set -euo pipefail
 
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +25,8 @@ MESON_BUILD="${MESON_BUILD:-${REPO_ROOT}/build/cosm500_1d_1rank}"
 
 TEMPLATE_PAR2="${BUNDLE_DIR}/cosm500_abacus_legacy_zeldovich.par2"
 RUNTIME_DIR="${BUNDLE_DIR}/.runtime"
-PARAM_FILE="${RUNTIME_DIR}/param.par2"
+PARAM_FILE="${RUNTIME_DIR}/param.par"
+PAR2_TO_PAR="${BUNDLE_DIR}/../scripts/par2_to_par.py"
 BIN_DIR="${BUNDLE_DIR}/bin_files"
 RNG_LOG_DIR="${BUNDLE_DIR}/rng_logs"
 WISDOM_LOG="${BUNDLE_DIR}/wisdom_preflight.log"
@@ -62,14 +68,35 @@ fi
 
 mkdir -p "${RUNTIME_DIR}" "${IC_OUTPUT_DIR}" "${BIN_DIR}" "${RNG_LOG_DIR}" "${PNG_DIR}"
 
-# Write runtime par2 with resolved absolute paths
-sed \
-  -e "s|^InitialConditionsDirectory = .*|InitialConditionsDirectory = \"${IC_OUTPUT_DIR}\"|" \
-  -e "s|^ZD_Pk_filename = .*|ZD_Pk_filename = \"${PK_FILE}\"|" \
-  -e "s|^ZD_PLT_filename = .*|ZD_PLT_filename = \"${PLT_FILE}\"|" \
-  -e "s|^ZD_Pk_primordial_filename = .*|ZD_Pk_primordial_filename = \"${PRIMORDIAL_PK_FILE}\"|" \
-  -e "s|^ZD_PNG_DIR = .*|ZD_PNG_DIR = \"${PNG_DIR}\"|" \
-  "${TEMPLATE_PAR2}" > "${PARAM_FILE}"
+# Expand the .par2 template into the runtime .par, overriding the paths with resolved
+# absolute ones (overrides win over values in the .par2, as in GenParam.makeInput).
+rm -f "${PARAM_FILE}"
+if [[ -n "${ABACUS:-}" && -f "${ABACUS}/Abacus/GenParam.py" ]]; then
+  echo "par2 -> par: GenParam (${ABACUS}/Abacus/GenParam.py)"
+  if ! PYTHONPATH="${ABACUS}${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${TEMPLATE_PAR2}" "${PARAM_FILE}" <<PYEOF
+import sys
+from Abacus.GenParam import makeInput
+makeInput(sys.argv[2], sys.argv[1],
+          InitialConditionsDirectory="${IC_OUTPUT_DIR}",
+          ZD_Pk_filename="${PK_FILE}",
+          ZD_PLT_filename="${PLT_FILE}",
+          ZD_Pk_primordial_filename="${PRIMORDIAL_PK_FILE}",
+          ZD_PNG_DIR="${PNG_DIR}")
+PYEOF
+  then
+    echo "WARNING: GenParam failed; falling back to scripts/par2_to_par.py" >&2
+    rm -f "${PARAM_FILE}"
+  fi
+fi
+if [[ ! -f "${PARAM_FILE}" ]]; then
+  echo "par2 -> par: ${PAR2_TO_PAR}"
+  python3 "${PAR2_TO_PAR}" "${TEMPLATE_PAR2}" "${PARAM_FILE}" \
+    -s "InitialConditionsDirectory=${IC_OUTPUT_DIR}" \
+    -s "ZD_Pk_filename=${PK_FILE}" \
+    -s "ZD_PLT_filename=${PLT_FILE}" \
+    -s "ZD_Pk_primordial_filename=${PRIMORDIAL_PK_FILE}" \
+    -s "ZD_PNG_DIR=${PNG_DIR}"
+fi
 
 if (( DO_BUILD )); then
   # shellcheck source=/dev/null
@@ -84,7 +111,7 @@ if [[ ! -x "${ZMPI_EXE}" || ! -x "${WISDOM_EXE}" ]]; then
   exit 1
 fi
 
-# N from NP in par2 (500 for this case)
+# N for the wisdom preflight (should match NP in the .par)
 N=128
 
 if [[ -n "${PBS_NODEFILE:-}" && -f "${PBS_NODEFILE}" ]]; then
@@ -123,6 +150,7 @@ grep "\[REAL-FFT-DEBUG\]" "${RNG_LOG_DIR}/zd_mpi_rng_debug.log" \
 IC_COUNT="$(find "${IC_OUTPUT_DIR}" -type f \( -name 'ic_*' -o -path '*/ic/*' \) 2>/dev/null | wc -l)"
 echo "Done. Particle IC segments under ${IC_OUTPUT_DIR}: ${IC_COUNT} files"
 echo "  param: ${PARAM_FILE}"
+echo "  kernel: ${MPIEXEC} -n <R> ${MESON_BUILD}/src/Kernel_MPI ${PARAM_FILE}"
 echo "  stdout: ${RUN_LOG}"
 echo "  stderr: ${RNG_LOG_DIR}/zd_mpi_rng_debug.log"
 

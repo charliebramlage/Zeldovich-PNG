@@ -51,9 +51,9 @@ def rank_pair_range(r, total_pairs, num_ranks): #returns the y_primary values ow
     start = r * (per + 1) if r < rem else rem * (per + 1) + (r - rem) * per
     return list(range(start, start + num_pairs))
 
-#Get the BoxSize (L), NumZRanks, and the shared slice directory from the same param.par2
+#Get the BoxSize (L), NumZRanks, and the shared slice directory from the same param.par
 #that run.sh feeds to Zeldovich_MPI.
-PARAM_FILE = os.environ.get("PARAM_FILE", ".runtime/param.par2")
+PARAM_FILE = os.environ.get("PARAM_FILE", ".runtime/param.par")
 par2_params = parse_par2(PARAM_FILE)
 L = par2_params["BoxSize"] ##think about units
 PNG_DIR = par2_params.get("ZD_PNG_DIR", "png_slices")

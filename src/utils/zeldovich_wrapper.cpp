@@ -196,6 +196,12 @@ double zeldovich_params_get_f_NL(ParametersHandle params) {
     return p->f_NL;
 }
 
+double zeldovich_params_get_f_NL_shape(ParametersHandle params, int i) {
+    if (!params || i < 0 || i >= 4) return 0.0;
+    ZeldovichParameters* p = static_cast<ZeldovichParameters*>(params);
+    return p->f_NL_shape[i];
+}
+
 double zeldovich_params_get_Pk_norm(ParametersHandle params) {
     if (!params) return 0.0;
     ZeldovichParameters* p = static_cast<ZeldovichParameters*>(params);

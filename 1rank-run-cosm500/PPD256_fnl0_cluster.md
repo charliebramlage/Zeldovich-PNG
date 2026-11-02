@@ -4,7 +4,7 @@ Compare ordinary Zel'dovich initial conditions (meson branch, no PNG generation)
 
 Use `project1/Zeldovich-PNG-grace` for the PNG side. The `png-port` branch of `Zeldovich-MPI` only has parameter getters. It does not write `Phi_gaussian_y.*` or read `kernel_y.*`.
 
-Pull `my-edits-on-meson` on the cluster. That branch has Grace's C kernel port (`src/kernel`, commit `e0ad77b`) and the y-keyed slice names (`ZD_PNG_DIR/Phi_gaussian_y.{y}`, `kernel_y.{y}`). This note uses the Python kernel and the Zel'dovich dump/load path. Grace's `Kernel_MPI` binary reads and writes the same y-keyed slices, so it can replace the Python kernel in step 2.
+Pull `my-edits-on-meson` on the cluster. That branch has Grace's C kernel port (`src/kernel`, commit `e0ad77b`) and the y-keyed slice names (`ZD_PNG_DIR/Phi_gaussian_y.{y}`, `kernel_<shape>_y.{y}`). This note uses the Python kernel and the Zel'dovich dump/load path. Grace's `Kernel_MPI` binary writes the per-shape `kernel_<shape>_y.{y}` files that the load pass reads, so it can replace the Python kernel in step 2. The Python kernel writes a single `kernel_y.{y}` set, which has to be renamed (step 2).
 
 Build on a compute node (or a compile node) that has meson, ninja, MPI, single-precision FFTW with OpenMP, and bison 3 or newer. Keep `png_slices/` and both initial-condition directories on a filesystem shared with the node that runs `kernel_MPI.py`.
 
@@ -16,7 +16,8 @@ Edit `cosm500_abacus_legacy_zeldovich.par2`:
 
 - `NP = 16777216` (256³). It is currently `2097152` (128³).
 - `CPD = 256`. It is currently `243`, and 243 does not divide 256. The writer uses `file_index = z * CPD / N` and puts `N/CPD` planes in each file.
-- `ZD_f_NL = 0`. The dump pass ignores this value. Setting it here keeps the later load pass from applying `f_NL = 100`.
+- `ZD_f_NL = 0`. This is the amplitude. The dump pass ignores it. Setting it here keeps the later load pass from applying the template value (currently `1000000`).
+- `ZD_f_NL_local = 1`, `ZD_f_NL_equil = 0`, `ZD_f_NL_orthoCMB = 0`, `ZD_f_NL_orthoLSS = 0`. These are on/off switches for each shape, not amplitudes. The kernel step computes every nonzero shape, and the load pass reads `kernel_<shape>_y.{y}` for each of them. At least one must be nonzero, or `Kernel_MPI` aborts. Enable only one here: the Python kernel writes just one shape (the last enabled one).
 - `NumZRanks = 1`. The template is currently `2` (Grace's 128³, 2-rank cosm500 run). This sanity check is 1 rank. `ZD_NumZRanks` is no longer in the file.
 
 Edit `run.sh`: the wisdom preflight is `N=128`. Change that assignment to `N=256`. The particle grid still comes from `NP`; this `N` is only the size passed to `wisdom_rank0`.
@@ -64,7 +65,7 @@ Do not delete `png_slices/` after this step.
 
 ## 2. Build the kernels
 
-Run this from `1rank-run-cosm500` so the default `PARAM_FILE=.runtime/param.par2` resolves. That file is what `run.sh` wrote, with absolute paths. Use `kernel_MPI.py`. `kernel_MPI_test.py` still has the old rank-keyed names.
+Run this from `1rank-run-cosm500` so the default `PARAM_FILE=.runtime/param.par` resolves. That file is what `run.sh` wrote, with absolute paths. Use `kernel_MPI.py`. `kernel_MPI_test.py` still has the old rank-keyed names.
 
 ```bash
 cd "$REPO_ROOT/1rank-run-cosm500"
@@ -73,16 +74,24 @@ python3 kernel_MPI.py > kernel_ppd256.log 2>&1
 
 The script reads `Phi_gaussian_y.0` to get `N`, then writes `png_slices/kernel_y.{y}`. The kernel grid is `512^3`, so give the process a few GB of memory. Confirm `kernel_ppd256.log` prints `N 256` and that `kernel_y.0` through `kernel_y.128` exist.
 
-To use the C kernel instead, build it in double precision and run it on the same parameter file. It reads `ZD_PNG_DIR` from the par2 file and writes `kernel_y.{y}` into that directory. Any rank count works, as long as it is a multiple of `NumZRanks` and at most `N/2 + 1`. It does not have to match the dump or load runs.
+The load pass reads per-shape names, so rename the Python output to match the enabled shape (`local` here):
+
+```bash
+cd "$PNG_DIR"
+for f in kernel_y.*; do mv "$f" "kernel_local_y.${f#kernel_y.}"; done
+```
+
+To use the C kernel instead, build it in double precision and run it on the same parameter file. It reads `ZD_PNG_DIR` from the parameter file and writes `kernel_<shape>_y.{y}` into that directory for every enabled shape, so no renaming is needed. Any rank count works, as long as it is a multiple of `NumZRanks` and at most `N/2 + 1`. It does not have to match the dump or load runs.
 
 ```bash
 cd "$REPO_ROOT"
-tests/kernel_regression/build_kernel.sh
+meson setup build/kernel_double -Ddouble_precision=true   # once; add --reconfigure if the dir exists
+meson compile -C build/kernel_double Kernel_MPI
 cd "$REPO_ROOT/1rank-run-cosm500"
-mpiexec -n 2 "$REPO_ROOT/build/kernel_double/src/Kernel_MPI" .runtime/param.par2 > kernel_ppd256.log 2>&1
+mpiexec -n 2 "$REPO_ROOT/build/kernel_double/src/Kernel_MPI" .runtime/param.par > kernel_ppd256.log 2>&1
 ```
 
-Check the same things: `N=256` in the log and `kernel_y.0` through `kernel_y.128` in `png_slices/`.
+Check the same things: `N=256` in the log and `kernel_local_y.0` through `kernel_local_y.128` in `png_slices/`.
 
 ## 3. Load pass (`f_NL = 0`)
 
@@ -102,7 +111,7 @@ cd "$REPO_ROOT/1rank-run-cosm500"
 ./run.sh
 ```
 
-`ZD_f_NL` is read from the parameter file at runtime. With the template set to 0, this run reads `kernel_y.{y}`, adds `0 * K`, and the `3/5` and `5/3` factors cancel. The particles under `output_png_load_fnl0_ppd256` are the ones to compare to `output_meson_ppd256`.
+`ZD_f_NL` is read from the parameter file at runtime. For each enabled shape, this run reads `kernel_<shape>_y.{y}` and writes `phi_<shape>_divided_y.{y} = (phi_G + ZD_f_NL * K) * s` into `PNG_DIR`, where `s = (5/3)/sqrt(P_primordial(k))`. With `ZD_f_NL = 0` this is just `phi_G * s`. A missing or short kernel file is reported on stderr and that shape is skipped, so check the log for `ERROR`. The particles are built from the Gaussian field, and the ones under `output_png_load_fnl0_ppd256` are the ones to compare to `output_meson_ppd256`.
 
 Put the `build.sh` extra-args line back to `-Dextra_cpp_args=-g` when you want another dump binary. The two `MESON_BUILD` directories keep the dump and load executables from overwriting each other.
 
