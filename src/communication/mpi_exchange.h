@@ -54,6 +54,14 @@ void pack_slices_to_send_buffer(
     fftw_complex_t *send_buffer, int64_t *sendcounts, int64_t *sdispls,
     int size_x, int size_z, int cpd);
 
+// Alltoallv with int64 counts and displacements (in elements of datatype).
+// MPI >= 4: MPI_Alltoallv_c. MPI 3.x (or force_p2p != 0): Isend/Irecv per peer at
+// int64 buffer offsets, so only each per-peer count must fit in an int.
+// Returns MPI_SUCCESS or the first MPI error code (comm uses MPI_ERRORS_RETURN).
+int zd_alltoallv_int64(const void *sendbuf, const int64_t *sendcounts, const int64_t *sdispls,
+                       void *recvbuf, const int64_t *recvcounts, const int64_t *rdispls,
+                       MPI_Datatype datatype, int num_ranks, MPI_Comm comm, int force_p2p);
+
 // Unpack received data into local pencils
 // Each pencil is a Y-column for one (X,Z) point in my owned region
 // Data arrives from all Y-slice ranks, organized by source rank

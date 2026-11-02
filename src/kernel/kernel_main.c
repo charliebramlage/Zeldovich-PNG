@@ -28,7 +28,7 @@
  *   KERNEL_ZERO_NYQUIST=1            zero the kx/ky/kz = N/2 modes of phi before the kernels
  *   KERNEL_ONLY_TERM=<A1|C1|...>     debug: run only this term with coef 1 (output = J*Q),
  *                                    written to kernel_<term>_y.{y}
- *   KERNEL_FORCE_STAGED_A2A=1        test: always use the INT_MAX-safe staged Alltoallv path
+ *   KERNEL_FORCE_STAGED_A2A=1        test: force the point-to-point (MPI 3) Alltoallv path
  *
  * Precision follows precision.h (real_t / fftw_complex_t): single by default, double
  * with -Ddouble_precision=true. Slice files are float64 either way.

@@ -289,6 +289,18 @@ int zeldovich_ps_init_from_raw_pk(PowerSpectrumHandle ps, const double* k, const
     }
 }
 
+int zeldovich_ps_init_primordial_from_raw_pk(PowerSpectrumHandle ps, const double* k, const double* p,
+    size_t n, ParametersHandle params) {
+    if (!ps || !params || !k || !p || n == 0) return -1;
+    try {
+        PowerSpectrum* ps_ptr = static_cast<PowerSpectrum*>(ps);
+        ZeldovichParameters* par = static_cast<ZeldovichParameters*>(params);
+        return ps_ptr->InitPrimordialFromRawPk(k, p, n, *par);
+    } catch (...) {
+        return -1;
+    }
+}
+
 double zeldovich_ps_power(PowerSpectrumHandle ps, double wavenumber) {
     if (!ps) return 0.0;
     PowerSpectrum* p = static_cast<PowerSpectrum*>(ps);

@@ -349,7 +349,8 @@ if (dump_buf == NULL) {
     // Charlie: every f_NL shape enabled in the .par (nonzero ZD_f_NL_<shape>) is handled in one run.
     // The z-loop only stores phi_G * s and s, with s = (5/3)/sqrt(P_primordial(k)) (0 on masked modes).
     // After the z-loop each shape is done in turn, reusing one buffer:
-    //     kernel_<shape>_y.{y}  ->  (phi_G + f_NL*kernel) * s  ->  phi_<shape>_divided_y.{y}
+    //     kernel_<shape>_y.{y}  ->  (phi_G + f_NL*kernel) * s  ->  phi_<shape>_fNL<f_NL>_divided_y.{y}
+    // where <f_NL> is ZD_f_NL printed with %g (e.g. phi_local_fNL10_divided_y.3, phi_equil_fNL-2.5_divided_y.3).
     // so memory does not grow with the number of shapes. D stays Gaussian in this run.
     // All buffers: interleaved (real, imag), x fastest, then z, as in the Phi_gaussian dump.
     static const char *fnl_shape_names[4] = {"local", "equil", "orthoCMB", "orthoLSS"};
@@ -892,8 +893,8 @@ if (phiG_scaled != NULL && ng_scale != NULL && shape_buf != NULL) {
         }
 
         char divided_filename[1024];
-        snprintf(divided_filename, sizeof(divided_filename), "%s/phi_%s_divided_y.%d",
-                 png_dir, fnl_shape_names[shape], global_y);
+        snprintf(divided_filename, sizeof(divided_filename), "%s/phi_%s_fNL%g_divided_y.%d",
+                 png_dir, fnl_shape_names[shape], f_NL, global_y);
         FILE *divided_fp = fopen(divided_filename, "wb");
         if (divided_fp == NULL) {
             fprintf(stderr, "ERROR: Could not open %s for writing divided phi\n", divided_filename);

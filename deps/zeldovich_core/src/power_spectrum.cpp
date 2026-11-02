@@ -24,7 +24,13 @@ int ReadPkTextFileIntoVectors(const fs::path &filename, ZeldovichParameters &par
         if (sscanf(line, "%lf %lf", &k, &P) < 2) continue;
         if (k < 0.0) continue;
         if (P < 0.0) continue;
+        // Pk_scale converts the file's units to BoxSize units: k_box = Pk_scale * k_file.
+        // P has units of length^3, so it converts by the inverse cube. Upstream only scaled k,
+        // which ZD_Pk_sigma's sigma(R) matching hides, but the 1/BoxSize^3-only primordial
+        // normalization and ZD_Pk_sigma_ratio use P's amplitude directly.
+        // E.g. BoxSize in Mpc, file in h/Mpc and (Mpc/h)^3, Pk_scale = h: P_Mpc^3 = P / h^3.
         k *= param.Pk_scale;
+        P /= param.Pk_scale * param.Pk_scale * param.Pk_scale;
         k_out.push_back(k);
         p_out.push_back(P);
     }
@@ -166,7 +172,7 @@ double PowerSpectrum::Romberg(
     return TT[jj][jj];
 }
 
-int PowerSpectrum::InitFromRawPk(const double *k_arr, const double *p_arr, size_t n, ZeldovichParameters &param) {
+int PowerSpectrum::LoadRawPk(const double *k_arr, const double *p_arr, size_t n) {
     if (n == 0 || k_arr == NULL || p_arr == NULL) return -1;
     for (size_t i = 0; i < n; i++) {
         double k = k_arr[i];
@@ -180,7 +186,18 @@ int PowerSpectrum::InitFromRawPk(const double *k_arr, const double *p_arr, size_
         kmax = std::max(k, kmax);
     }
     this->spline();
+    return 0;
+}
+
+int PowerSpectrum::InitFromRawPk(const double *k_arr, const double *p_arr, size_t n, ZeldovichParameters &param) {
+    if (LoadRawPk(k_arr, p_arr, n) != 0) return -1;
     Normalize(param);
+    return 0;
+}
+
+int PowerSpectrum::InitPrimordialFromRawPk(const double *k_arr, const double *p_arr, size_t n, ZeldovichParameters &param) {
+    if (LoadRawPk(k_arr, p_arr, n) != 0) return -1;
+    NormalizeBoxOnly(param);
     return 0;
 }
 
@@ -243,6 +260,15 @@ void PowerSpectrum::Normalize(ZeldovichParameters &param) {
 
     primordial_norm = 1.;
     primordial_norm = this->power(this->kmin) / this->primordial_power(this->kmin);
+}
+
+void PowerSpectrum::NormalizeBoxOnly(ZeldovichParameters &param) {
+    // Only the FFTW box-volume factor from Normalize(): the spectrum keeps the
+    // amplitude of its input file. No sigma(R) matching, no Pk_smooth, no fixed power.
+    normalization   = 1.0 / (param.boxsize * param.boxsize * param.boxsize);
+    Pk_smooth2      = 0.0;
+    fixed_power     = 0;
+    primordial_norm = 1.;  // only used by primordial_power(), not by this spectrum's power()
 }
 
 double PowerSpectrum::power(double wavenumber) {

@@ -31,7 +31,7 @@
  *    a. Get batch’s (y_primary, y_mirror)
  *    b. Alloc local_y_slices + fft_stage_2d → generate + 2D FFT → free stage
  *    c. calculate_batch_send_recv_counts; pack_slices_to_send_buffer; free local_y_slices
- *    d. MPI_Alltoallv_c(send_buffer -> recv_buffer)
+ *    d. zd_alltoallv_int64(send_buffer -> recv_buffer): MPI_Alltoallv_c on MPI >= 4, Isend/Irecv otherwise
  *    e. Update src_write_cursor; free per-batch send buffer
  *
  * 8. Z-SLAB STREAMING (for each Z owned by this rank)
@@ -566,17 +566,11 @@ extern "C" int zeldovich_mpi_driver_run(int argc, char **argv)
 
                     ps_primordial = zeldovich_ps_create(n_prim_i, params);
                     if (ps_primordial != NULL) {
-                        // Zero Pk_norm for this load so Normalize() skips its sigma8-matching
-                        // branch entirely
-                        //  normalization = 1.0 / boxsize^3
-                        // i.e. only the FFT/box-volume convention factor, shared with the
-                        // main spectrum, but WITHOUT the main spectrum's growth-to-z_initial
-                        // rescaling
-                        double saved_Pk_norm = zeldovich_params_get_Pk_norm(params);
-                        zeldovich_params_set_Pk_norm(params, 0.0);
-                        int prim_init_rc = zeldovich_ps_init_from_raw_pk(
+                        // normalization = 1.0 / boxsize^3 and nothing else: only the
+                        // FFT/box-volume convention factor shared with the main spectrum,
+                        // never its sigma(R)/growth rescaling or Pk_smooth
+                        int prim_init_rc = zeldovich_ps_init_primordial_from_raw_pk(
                             ps_primordial, prim_k.data(), prim_P.data(), (size_t)n_prim, params);
-                        zeldovich_params_set_Pk_norm(params, saved_Pk_norm);
 
                         if (prim_init_rc != 0) {
                             if (rank == 0) {
@@ -970,8 +964,7 @@ extern "C" int zeldovich_mpi_driver_run(int argc, char **argv)
             &total_send_batch, &total_recv_batch
         );
         
-        // 4096 = safe upper bound for # ranks
-        int64_t rdispls_elem[4096];
+        std::vector<int64_t> rdispls_elem(num_ranks);
         for (int src = 0; src < num_ranks; src++) {
             int64_t new_displ = recv_displs_src[src] + src_write_cursor[src];
             if (new_displ < 0) {
@@ -1095,30 +1088,24 @@ extern "C" int zeldovich_mpi_driver_run(int argc, char **argv)
 
         t_comm.Start();
         {
-            int sendcounts_c[4096], recvcounts_c[4096];
-            int sdispls_c[4096], rdispls_c[4096];
-            /* sdispls/rdispls are in element units (MPI multiplies by extent internally), NOT bytes */
-            for (int i = 0; i < num_ranks; i++) {
-                sendcounts_c[i] = (MPI_Count)sendcounts_batch[i];
-                recvcounts_c[i] = (MPI_Count)recvcounts_batch[i];
-                sdispls_c[i] = (MPI_Aint)sdispls_batch[i];
-                rdispls_c[i] = (MPI_Aint)rdispls_elem[i];
-            }
-            int mpi_err = MPI_Alltoallv(
-                send_buffer_batch, sendcounts_c, sdispls_c, MPI_COMPLEX_TYPE,
-                recv_buffer, recvcounts_c, rdispls_c, MPI_COMPLEX_TYPE,
-                zd_comm_2d
+            /* Counts/displacements stay int64 in element units (not bytes): MPI_Alltoallv_c on
+             * MPI >= 4, Isend/Irecv fallback otherwise. Receive displacements reach
+             * ~4*N^3/num_ranks, which overflows the int arguments of plain MPI_Alltoallv. */
+            int mpi_err = zd_alltoallv_int64(
+                send_buffer_batch, sendcounts_batch, sdispls_batch,
+                recv_buffer, recvcounts_batch, rdispls_elem.data(),
+                MPI_COMPLEX_TYPE, num_ranks, zd_comm_2d, 0
             );
             if (mpi_err != MPI_SUCCESS) {
                 char errstr[MPI_MAX_ERROR_STRING];
                 int errlen;
                 MPI_Error_string(mpi_err, errstr, &errlen);
-                fprintf(stderr, "[Rank %d] MPI_Alltoallv_c FAILED (batch %d): %s\n",
+                fprintf(stderr, "[Rank %d] Alltoallv FAILED (batch %d): %s\n",
                         rank, batch_idx, errstr);
                 for (int i = 0; i < num_ranks; i++) {
                     fprintf(stderr, "  send[%d]=%lld sdisp[%d]=%lld recv[%d]=%lld rdisp[%d]=%lld\n",
-                            i, (long long)sendcounts_c[i], i, (long long)sdispls_c[i],
-                            i, (long long)recvcounts_c[i], i, (long long)rdispls_c[i]);
+                            i, (long long)sendcounts_batch[i], i, (long long)sdispls_batch[i],
+                            i, (long long)recvcounts_batch[i], i, (long long)rdispls_elem[i]);
                 }
                 fflush(stderr);
                 MPI_Abort(zd_comm_2d, mpi_err);

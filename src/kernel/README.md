@@ -67,7 +67,7 @@ Command-line arguments override environment variables, which override the parame
 | `KERNEL_PAD_M=<M>` | Explicit `M`; overrides `KernelPadM` and the default |
 | `KERNEL_ZERO_NYQUIST=1` | Zero the `kx`, `ky`, `kz = N/2` modes of phi before computing kernels |
 | `KERNEL_ONLY_TERM=<A1\|C1\|...>` | Debug: run one term with coefficient 1 and write `kernel_<term>_y.{y}` |
-| `KERNEL_FORCE_STAGED_A2A=1` | Test: always use the `INT_MAX`-safe staged Alltoallv path |
+| `KERNEL_FORCE_STAGED_A2A=1` | Test: force the point-to-point (MPI 3) Alltoallv path instead of `MPI_Alltoallv_c` |
 
 ## Inputs and outputs
 

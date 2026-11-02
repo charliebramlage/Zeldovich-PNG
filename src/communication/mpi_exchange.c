@@ -7,6 +7,83 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <limits.h>
+
+// ====================================================================================
+//  Alltoallv with int64 counts/displacements
+//  Offsets reach ~4*N^3/num_ranks elements on the receive side (e.g. 6.9e12/R at N=12000),
+//  far beyond INT_MAX, so the int-argument MPI_Alltoallv cannot be used directly.
+// ====================================================================================
+
+int zd_alltoallv_int64(const void *sendbuf, const int64_t *sendcounts, const int64_t *sdispls,
+                       void *recvbuf, const int64_t *recvcounts, const int64_t *rdispls,
+                       MPI_Datatype datatype, int num_ranks, MPI_Comm comm, int force_p2p)
+{
+#if MPI_VERSION >= 4
+    if (!force_p2p) {
+        MPI_Count *sc = (MPI_Count*)malloc(sizeof(MPI_Count) * (size_t)num_ranks);
+        MPI_Count *rc = (MPI_Count*)malloc(sizeof(MPI_Count) * (size_t)num_ranks);
+        MPI_Aint *sd = (MPI_Aint*)malloc(sizeof(MPI_Aint) * (size_t)num_ranks);
+        MPI_Aint *rd = (MPI_Aint*)malloc(sizeof(MPI_Aint) * (size_t)num_ranks);
+        if (sc == NULL || rc == NULL || sd == NULL || rd == NULL) {
+            fprintf(stderr, "[ALLTOALLV] ERROR: failed to allocate count/displacement arrays\n");
+            MPI_Abort(comm, 1);
+        }
+        for (int i = 0; i < num_ranks; i++) {
+            sc[i] = (MPI_Count)sendcounts[i];
+            rc[i] = (MPI_Count)recvcounts[i];
+            sd[i] = (MPI_Aint)sdispls[i];
+            rd[i] = (MPI_Aint)rdispls[i];
+        }
+        int err = MPI_Alltoallv_c(sendbuf, sc, sd, datatype, recvbuf, rc, rd, datatype, comm);
+        free(sc); free(rc); free(sd); free(rd);
+        return err;
+    }
+#else
+    (void)force_p2p;
+#endif
+
+    // Point-to-point fallback: displacements become pointer offsets (int64), and only
+    // each per-peer message count is passed to MPI as an int.
+    for (int i = 0; i < num_ranks; i++) {
+        if (sendcounts[i] > INT_MAX || recvcounts[i] > INT_MAX) {
+            fprintf(stderr, "[ALLTOALLV] ERROR: per-peer count exceeds INT_MAX (peer %d: send %lld, recv %lld); "
+                            "use more ranks or an MPI >= 4 library\n",
+                    i, (long long)sendcounts[i], (long long)recvcounts[i]);
+            MPI_Abort(comm, 1);
+        }
+    }
+
+    MPI_Aint lb = 0, extent = 0;
+    MPI_Type_get_extent(datatype, &lb, &extent);
+    const char *sbase = (const char*)sendbuf;
+    char *rbase = (char*)recvbuf;
+
+    MPI_Request *reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * 2 * (size_t)num_ranks);
+    if (reqs == NULL) {
+        fprintf(stderr, "[ALLTOALLV] ERROR: failed to allocate request array\n");
+        MPI_Abort(comm, 1);
+    }
+    int nreq = 0;
+    int err = MPI_SUCCESS;
+    for (int i = 0; i < num_ranks && err == MPI_SUCCESS; i++) {
+        if (recvcounts[i] > 0) {
+            err = MPI_Irecv(rbase + rdispls[i] * (int64_t)extent, (int)recvcounts[i], datatype,
+                            i, 0, comm, &reqs[nreq++]);
+        }
+    }
+    for (int i = 0; i < num_ranks && err == MPI_SUCCESS; i++) {
+        if (sendcounts[i] > 0) {
+            err = MPI_Isend(sbase + sdispls[i] * (int64_t)extent, (int)sendcounts[i], datatype,
+                            i, 0, comm, &reqs[nreq++]);
+        }
+    }
+    if (err == MPI_SUCCESS) {
+        err = MPI_Waitall(nreq, reqs, MPI_STATUSES_IGNORE);
+    }
+    free(reqs);
+    return err;
+}
 
 // ====================================================================================
 //  Exchange metadata so that each rank knows which Y-slices it is responsible for

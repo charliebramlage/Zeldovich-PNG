@@ -159,6 +159,11 @@ int zeldovich_ps_init_file(PowerSpectrumHandle ps, const char* filename, Paramet
 int zeldovich_ps_init_from_raw_pk(PowerSpectrumHandle ps, const double* k, const double* p,
     size_t n, ParametersHandle params);
 
+// Initialize the primordial spectrum from raw tabulated k,P: normalization is
+// always exactly 1/BoxSize^3 (no Pk_norm/Pk_sigma/Pk_sigma_ratio, no Pk_smooth)
+int zeldovich_ps_init_primordial_from_raw_pk(PowerSpectrumHandle ps, const double* k, const double* p,
+    size_t n, ParametersHandle params);
+
 // Evaluate power spectrum at given wavenumber
 double zeldovich_ps_power(PowerSpectrumHandle ps, double wavenumber);
 
@@ -216,7 +221,8 @@ void zeldovich_ps_set_normalization(PowerSpectrumHandle ps, double normalization
 
 #include <vector>
 
-// Rank 0 only (MPI): read P(k) text file into vectors for broadcasting (Pk_scale applied)
+// Rank 0 only (MPI): read P(k) text file into vectors for broadcasting
+// (Pk_scale applied: k *= Pk_scale, P /= Pk_scale^3)
 int zeldovich_pk_load_text_file_vectors(const char* filename, ParametersHandle params,
     std::vector<double>& k_out, std::vector<double>& p_out);
 

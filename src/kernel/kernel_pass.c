@@ -5,7 +5,6 @@
 #include "kernel_pass.h"
 #include "communication/mpi_exchange.h"
 #include "fft/fft_setup.h"
-#include <limits.h>
 #include <math.h>
 #include <omp.h>
 #include <stdio.h>
@@ -28,86 +27,30 @@ fftw_complex_t *kernel_alloc_complex(int64_t count, const char *what)
 }
 
 // ====================================================================================
-// Alltoallv with int64 counts/displacements. MPI-3 only has int arguments, so when a
-// displacement exceeds INT_MAX the data is staged through contiguous temporaries
-// (whose displacements are prefix sums of the counts) and copied to the real offsets.
-// KERNEL_FORCE_STAGED_A2A=1 forces the staged path (used by the regression tests).
+// Alltoallv with int64 counts/displacements (zd_alltoallv_int64): MPI_Alltoallv_c on
+// MPI >= 4, Isend/Irecv at int64 offsets otherwise. KERNEL_FORCE_STAGED_A2A=1 forces the
+// point-to-point path even on MPI >= 4 (used by the regression tests).
 // ====================================================================================
 
 static void kernel_alltoallv(const fftw_complex_t *sendbuf, const int64_t *sc, const int64_t *sd,
                              fftw_complex_t *recvbuf, const int64_t *rc, const int64_t *rd,
                              int num_ranks, MPI_Comm comm)
 {
-    int *isc = (int*)malloc(sizeof(int) * num_ranks);
-    int *isd = (int*)malloc(sizeof(int) * num_ranks);
-    int *irc = (int*)malloc(sizeof(int) * num_ranks);
-    int *ird = (int*)malloc(sizeof(int) * num_ranks);
-
-    static int force_staged = -1;
-    if (force_staged < 0) {
+    static int force_p2p = -1;
+    if (force_p2p < 0) {
         const char *v = getenv("KERNEL_FORCE_STAGED_A2A");
-        force_staged = (v != NULL && atoi(v) != 0);
-    }
-    int direct = !force_staged;
-    int64_t send_total = 0, recv_total = 0;
-    for (int i = 0; i < num_ranks; i++) {
-        if (sc[i] > INT_MAX || rc[i] > INT_MAX) {
-            fprintf(stderr, "[Kernel_MPI] ERROR: per-rank message count exceeds INT_MAX (send %lld, recv %lld); use more ranks\n",
-                    (long long)sc[i], (long long)rc[i]);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        if (sd[i] > INT_MAX || rd[i] > INT_MAX) direct = 0;
-        send_total += sc[i];
-        recv_total += rc[i];
-    }
-    if (!direct && (send_total > INT_MAX || recv_total > INT_MAX)) {
-        fprintf(stderr, "[Kernel_MPI] ERROR: total message size exceeds INT_MAX elements; use more ranks\n");
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        force_p2p = (v != NULL && atoi(v) != 0);
     }
 
-    const fftw_complex_t *sbuf = sendbuf;
-    fftw_complex_t *rbuf = recvbuf;
-    fftw_complex_t *s_stage = NULL, *r_stage = NULL;
-
-    if (direct) {
-        for (int i = 0; i < num_ranks; i++) {
-            isc[i] = (int)sc[i]; isd[i] = (int)sd[i];
-            irc[i] = (int)rc[i]; ird[i] = (int)rd[i];
-        }
-    } else {
-        s_stage = kernel_alloc_complex(send_total, "alltoallv send stage");
-        r_stage = kernel_alloc_complex(recv_total, "alltoallv recv stage");
-        int64_t so = 0, ro = 0;
-        for (int i = 0; i < num_ranks; i++) {
-            memcpy(s_stage + so, sendbuf + sd[i], sizeof(fftw_complex_t) * (size_t)sc[i]);
-            isc[i] = (int)sc[i]; isd[i] = (int)so; so += sc[i];
-            irc[i] = (int)rc[i]; ird[i] = (int)ro; ro += rc[i];
-        }
-        sbuf = s_stage;
-        rbuf = r_stage;
-    }
-
-    int err = MPI_Alltoallv(sbuf, isc, isd, MPI_COMPLEX_TYPE,
-                            rbuf, irc, ird, MPI_COMPLEX_TYPE, comm);
+    int err = zd_alltoallv_int64(sendbuf, sc, sd, recvbuf, rc, rd,
+                                 MPI_COMPLEX_TYPE, num_ranks, comm, force_p2p);
     if (err != MPI_SUCCESS) {
         char errstr[MPI_MAX_ERROR_STRING];
         int errlen = 0;
         MPI_Error_string(err, errstr, &errlen);
-        fprintf(stderr, "[Kernel_MPI] ERROR: MPI_Alltoallv failed: %s\n", errstr);
+        fprintf(stderr, "[Kernel_MPI] ERROR: Alltoallv failed: %s\n", errstr);
         MPI_Abort(MPI_COMM_WORLD, err);
     }
-
-    if (!direct) {
-        int64_t ro = 0;
-        for (int i = 0; i < num_ranks; i++) {
-            memcpy(recvbuf + rd[i], r_stage + ro, sizeof(fftw_complex_t) * (size_t)rc[i]);
-            ro += rc[i];
-        }
-        free(s_stage);
-        free(r_stage);
-    }
-
-    free(isc); free(isd); free(irc); free(ird);
 }
 
 // ====================================================================================

@@ -27,9 +27,11 @@ ZD_Pk_norm = 8.0
 ZD_Pk_smooth = 0.0
 ZD_Version = 2
 ZD_f_cluster = 1.0
-ZD_Pk_sigma = 0.02086274818611812
+# ZD_Pk_sigma = 0.02086274818611812
+ZD_Pk_sigma_ratio = 0.04184690925780686   # D(z=49)/D(z=1) from Abacus calc_growth_ratio (abacus-public df6a23a; Omega_M above, flat LCDM)
+ZD_Pk_file_redshift = 1.0   # redshift of ZD_Pk_filename; used by abacus.param to compute ZD_Pk_sigma_ratio
 ZD_qPk_fix_to_mean = 0
-ZD_f_NL = 1000000
+ZD_f_NL = 100
 Omega_M = 0.3141531891588591
 ZD_n_s = 0.9652
 ZD_qdensity = 1

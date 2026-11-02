@@ -61,7 +61,12 @@ public:
 
     int InitFromPowerLaw(double _powerlaw_index, ZeldovichParameters &param);
 
+    // Primordial spectrum: like InitFromRawPk, but normalized by 1/BoxSize^3 only
+    // (NormalizeBoxOnly). No sigma(R) matching and no Pk_smooth, whatever the params say.
+    int InitPrimordialFromRawPk(const double *k_arr, const double *p_arr, size_t n, ZeldovichParameters &param);
+
     void Normalize(ZeldovichParameters &param);
+    void NormalizeBoxOnly(ZeldovichParameters &param);
 
     double power(double wavenumber);
     double primordial_power(double wavenumber);
@@ -76,4 +81,8 @@ public:
     
     // Get a copy of the RNG for specific Y-slice (for thread-local use)
     pcg64 get_rng_copy(int64_t rng_index) const;
+
+private:
+    // Load tabulated (k, P) into the spline. Shared by InitFromRawPk and InitPrimordialFromRawPk.
+    int LoadRawPk(const double *k_arr, const double *p_arr, size_t n);
 };
