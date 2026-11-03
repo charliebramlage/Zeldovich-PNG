@@ -112,7 +112,7 @@ if not get_option('abacus_embed')
     'wisdom_rank0',
     ['fft/wisdom_rank0.c', 'fft/wisdom_rank0_main.c', 'fft/fft_wisdom.c'],
     include_directories: wisdom_inc,
-    dependencies: [fftw_dep, omp_dep],
+    dependencies: [fftw_dep, omp_dep, mpi_dep],  # fft_wisdom.c calls MPI_Bcast
     link_language: 'cpp',
     install: true,
   )
