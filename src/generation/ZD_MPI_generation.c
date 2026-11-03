@@ -198,6 +198,17 @@ static const char *zd_png_dir(ParametersHandle params_handle) {
     return png_dir;
 }
 
+// f_NL as it appears in white-noise file names: whole numbers as plain integers (100 -> "100",
+// 1e6 -> "1000000", -5 -> "-5"), anything else with %g (0.5 -> "0.5"). Shared by the
+// LOAD_D_FROM_FILE writer and the LOAD_WHITE_NOISE_FROM_FILE reader so the two names always match.
+static void zd_format_fnl(char *buf, size_t len, double f_NL) {
+    if (f_NL == floor(f_NL) && fabs(f_NL) < 1e15) {
+        snprintf(buf, len, "%.0f", f_NL);
+    } else {
+        snprintf(buf, len, "%g", f_NL);
+    }
+}
+
 int zd_white_noise_path_prefix(ParametersHandle params_handle, char *buf, size_t len,
                                char *err, size_t errlen) {
     const char *png_dir = zd_png_dir(params_handle);
@@ -232,7 +243,9 @@ int zd_white_noise_path_prefix(ParametersHandle params_handle, char *buf, size_t
 
     int n;
     if (nshapes == 1) {
-        n = snprintf(buf, len, "%s/phi_%s_fNL%g_divided", png_dir, fnl_shape_names[shape_on], f_NL);
+        char fnl_str[64];
+        zd_format_fnl(fnl_str, sizeof(fnl_str), f_NL);
+        n = snprintf(buf, len, "%s/phi_%s_fNL%s_divided", png_dir, fnl_shape_names[shape_on], fnl_str);
     } else if (name[0] == '/') {
         n = snprintf(buf, len, "%s", name);
     } else {
@@ -408,7 +421,8 @@ if (dump_buf == NULL) {
     // The z-loop only stores phi_G * s and s, with s = (5/3)/sqrt(P_primordial(k)) (0 on masked modes).
     // After the z-loop each shape is done in turn, reusing one buffer:
     //     kernel_<shape>_y.{y}  ->  (phi_G + f_NL*kernel) * s  ->  phi_<shape>_fNL<f_NL>_divided_y.{y}
-    // where <f_NL> is ZD_f_NL printed with %g (e.g. phi_local_fNL10_divided_y.3, phi_equil_fNL-2.5_divided_y.3).
+    // where <f_NL> is ZD_f_NL from zd_format_fnl: whole numbers as integers, otherwise %g
+    // (e.g. phi_local_fNL1000000_divided_y.3, phi_equil_fNL-2.5_divided_y.3).
     // so memory does not grow with the number of shapes. D stays Gaussian in this run.
     // All buffers: interleaved (real, imag), x fastest, then z, as in the Phi_gaussian dump.
     size_t nmodes = (size_t)N * (size_t)N;
@@ -966,8 +980,10 @@ if (phiG_scaled != NULL && ng_scale != NULL && shape_buf != NULL) {
         }
 
         char divided_filename[1024];
-        snprintf(divided_filename, sizeof(divided_filename), "%s/phi_%s_fNL%g_divided_y.%d",
-                 png_dir, fnl_shape_names[shape], f_NL, global_y);
+        char fnl_str[64];
+        zd_format_fnl(fnl_str, sizeof(fnl_str), f_NL);
+        snprintf(divided_filename, sizeof(divided_filename), "%s/phi_%s_fNL%s_divided_y.%d",
+                 png_dir, fnl_shape_names[shape], fnl_str, global_y);
         FILE *divided_fp = fopen(divided_filename, "wb");
         if (divided_fp == NULL) {
             fprintf(stderr, "ERROR: Could not open %s for writing divided phi\n", divided_filename);

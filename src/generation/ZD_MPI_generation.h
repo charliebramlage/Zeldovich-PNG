@@ -57,7 +57,8 @@ void generate_zd_mpi_slice_pair_local(
     void** thread_rng_buffers);       // Pre-allocated RNG buffers [nthreads] (NULL = use malloc)
 
 // Charlie: path prefix of the LOAD_WHITE_NOISE_FROM_FILE input (the file is {prefix}_y.{y}).
-// Exactly one nonzero ZD_f_NL_<shape>:  {png_dir}/phi_<shape>_fNL<ZD_f_NL %g>_divided
+// Exactly one nonzero ZD_f_NL_<shape>:  {png_dir}/phi_<shape>_fNL<ZD_f_NL>_divided, with ZD_f_NL
+//   written as an integer when whole (fNL100, fNL1000000) and with %g otherwise (fNL-2.5)
 //   (the name LOAD_D_FROM_FILE writes). All shapes 0: {png_dir}/<ZD_white_noise_name>
 //   (an absolute name is used as-is).
 // Returns 0 on success; nonzero with a message in err if several shapes are set, no shape and
