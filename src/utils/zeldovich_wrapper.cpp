@@ -122,6 +122,13 @@ const char* zeldovich_params_get_png_dir(ParametersHandle params) {
     return p->png_dir.c_str();
 }
 
+const char* zeldovich_params_get_white_noise_name(ParametersHandle params) {
+    if (!params) return NULL;
+    ZeldovichParameters* p = static_cast<ZeldovichParameters*>(params);
+    if (p->white_noise_name.empty()) return NULL;
+    return p->white_noise_name.c_str();
+}
+
 double zeldovich_params_get_f_cluster(ParametersHandle params) {
     if (!params) return 0.0;
     ZeldovichParameters* p = static_cast<ZeldovichParameters*>(params);

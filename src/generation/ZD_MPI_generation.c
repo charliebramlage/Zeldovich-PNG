@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <omp.h>
+#include <mpi.h>
 #include <filesystem>
 
 // Fine-grained PTimerWall accumulators for Stage 1 sub-phases.
@@ -183,6 +184,67 @@ static inline void store_prim_conj( //Charlie: this function enforces Hermitian 
 
 // ====================================================================================
 // Generates one pair of conjugate Y-slices (primary + mirror) in Fourier space
+// Charlie: f_NL shape names, indexed like ZD_f_NL_local/equil/orthoCMB/orthoLSS (f_NL_shape[0..3]).
+// Shared by the LOAD_D_FROM_FILE writer and the LOAD_WHITE_NOISE_FROM_FILE reader so names match.
+static const char *fnl_shape_names[4] = {"local", "equil", "orthoCMB", "orthoLSS"};
+
+// ZD_PNG_DIR, default "png_slices"
+static const char *zd_png_dir(ParametersHandle params_handle) {
+    const char *png_dir = "png_slices";
+    if (params_handle != NULL) {
+        const char *parsed_png_dir = zeldovich_params_get_png_dir(params_handle);
+        if (parsed_png_dir != NULL && parsed_png_dir[0] != '\0') png_dir = parsed_png_dir;
+    }
+    return png_dir;
+}
+
+int zd_white_noise_path_prefix(ParametersHandle params_handle, char *buf, size_t len,
+                               char *err, size_t errlen) {
+    const char *png_dir = zd_png_dir(params_handle);
+    const char *name = (params_handle != NULL) ? zeldovich_params_get_white_noise_name(params_handle) : NULL;
+    double f_NL = (params_handle != NULL) ? zeldovich_params_get_f_NL(params_handle) : 0.0;
+
+    int nshapes = 0, shape_on = -1;
+    char shape_list[128] = "";
+    for (int shape = 0; shape < 4; shape++) {
+        if (params_handle == NULL || zeldovich_params_get_f_NL_shape(params_handle, shape) == 0.0) continue;
+        nshapes++;
+        shape_on = shape;
+        strncat(shape_list, " ZD_f_NL_", sizeof(shape_list) - strlen(shape_list) - 1);
+        strncat(shape_list, fnl_shape_names[shape], sizeof(shape_list) - strlen(shape_list) - 1);
+    }
+
+    if (nshapes > 1) {
+        snprintf(err, errlen, "LOAD_WHITE_NOISE_FROM_FILE: only one f_NL shape may be set, "
+                 "but %d are nonzero:%s", nshapes, shape_list);
+        return 1;
+    }
+    if (nshapes == 1 && name != NULL) {
+        snprintf(err, errlen, "LOAD_WHITE_NOISE_FROM_FILE: ZD_white_noise_name = \"%s\" is only used when "
+                 "all f_NL shapes are 0, but%s is set; unset one of them", name, shape_list);
+        return 1;
+    }
+    if (nshapes == 0 && name == NULL) {
+        snprintf(err, errlen, "LOAD_WHITE_NOISE_FROM_FILE: no f_NL shape is set (ZD_f_NL_local/equil/"
+                 "orthoCMB/orthoLSS) and no ZD_white_noise_name is given; set exactly one of them");
+        return 1;
+    }
+
+    int n;
+    if (nshapes == 1) {
+        n = snprintf(buf, len, "%s/phi_%s_fNL%g_divided", png_dir, fnl_shape_names[shape_on], f_NL);
+    } else if (name[0] == '/') {
+        n = snprintf(buf, len, "%s", name);
+    } else {
+        n = snprintf(buf, len, "%s/%s", png_dir, name);
+    }
+    if (n < 0 || (size_t)n >= len) {
+        snprintf(err, errlen, "LOAD_WHITE_NOISE_FROM_FILE: white noise file path too long");
+        return 1;
+    }
+    return 0;
+}
+
 // Gaussian w/ power spectrum weighting (w/ zeldovich-PLT ps_handle & params_handle)
 // 2D FFT: Fourier --> real space (X,Z)
 // Handles RNG nskip tracking
@@ -313,11 +375,7 @@ void generate_zd_mpi_slice_pair_local(
 #endif
 
 
-    const char *png_dir = "png_slices";
-    if (params_handle != NULL) {
-        const char *parsed_png_dir = zeldovich_params_get_png_dir(params_handle);
-        if (parsed_png_dir != NULL && parsed_png_dir[0] != '\0') png_dir = parsed_png_dir;
-    }
+    const char *png_dir = zd_png_dir(params_handle);
     {
         std::error_code png_dir_ec;
         std::filesystem::create_directories(png_dir, png_dir_ec);
@@ -353,7 +411,6 @@ if (dump_buf == NULL) {
     // where <f_NL> is ZD_f_NL printed with %g (e.g. phi_local_fNL10_divided_y.3, phi_equil_fNL-2.5_divided_y.3).
     // so memory does not grow with the number of shapes. D stays Gaussian in this run.
     // All buffers: interleaved (real, imag), x fastest, then z, as in the Phi_gaussian dump.
-    static const char *fnl_shape_names[4] = {"local", "equil", "orthoCMB", "orthoLSS"};
     size_t nmodes = (size_t)N * (size_t)N;
     double *phiG_scaled = (double*)malloc(nmodes * 2 * sizeof(double));  // phi_G * s
     double *ng_scale    = (double*)malloc(nmodes * sizeof(double));      // s
@@ -366,33 +423,49 @@ if (dump_buf == NULL) {
 
 #if LOAD_WHITE_NOISE_FROM_FILE
 
+    // Charlie: file is {prefix}_y.{y}, prefix chosen from the .par by zd_white_noise_path_prefix
+    // (phi_<shape>_fNL<f_NL>_divided, or ZD_white_noise_name when all shapes are 0).
+    // Any problem aborts: continuing would build D from uninitialized memory.
     double *loaded_noise_real = (double*)malloc((size_t)N * (size_t)N * sizeof(double));
     double *loaded_noise_imag = (double*)malloc((size_t)N * (size_t)N * sizeof(double));
     {
-        char load_filename[1024];
-        snprintf(load_filename, sizeof(load_filename), "%s/phi_divided_y.%d", png_dir, global_y); 
+        char load_prefix[1024], prefix_err[512];
+        if (zd_white_noise_path_prefix(params_handle, load_prefix, sizeof(load_prefix),
+                                       prefix_err, sizeof(prefix_err)) != 0) {
+            fprintf(stderr, "ERROR (rank %d): %s\n", rank, prefix_err);
+            fflush(stderr);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        char load_filename[1100];
+        snprintf(load_filename, sizeof(load_filename), "%s_y.%d", load_prefix, global_y);
         FILE *load_fp = fopen(load_filename, "rb");
         if (load_fp == NULL) {
-            fprintf(stderr, "ERROR: Could not open %s for reading phi", load_filename);
-        } else {
-            // File holds N*N interleaved (real, imag) doubles, x fastest then z,
-            // so element i is already at index z*N + x.
-            size_t nvals = (size_t)N * (size_t)N;
-            double *tmp = (double*)malloc(nvals * 2 * sizeof(double));
-            size_t nread = (tmp != NULL) ? fread(tmp, 2 * sizeof(double), nvals, load_fp) : 0;
-            if (nread != nvals) {
-                fprintf(stderr, "ERROR: short read in %s (got %zu/%zu complex values)\n",
-                        load_filename, nread, nvals);
-            }
-            if (tmp != NULL) {
-                for (size_t i = 0; i < nread; i++) {
-                    loaded_noise_real[i] = tmp[2*i];
-                    loaded_noise_imag[i] = tmp[2*i + 1];
-                }
-                free(tmp);
-            }
-            fclose(load_fp);
+            fprintf(stderr, "ERROR (rank %d): Could not open %s for reading white noise\n", rank, load_filename);
+            fflush(stderr);
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
+        // File holds N*N interleaved (real, imag) doubles, x fastest then z,
+        // so element i is already at index z*N + x.
+        size_t nvals = (size_t)N * (size_t)N;
+        double *tmp = (double*)malloc(nvals * 2 * sizeof(double));
+        if (tmp == NULL || loaded_noise_real == NULL || loaded_noise_imag == NULL) {
+            fprintf(stderr, "ERROR (rank %d): Could not allocate white noise buffers\n", rank);
+            fflush(stderr);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        size_t nread = fread(tmp, 2 * sizeof(double), nvals, load_fp);
+        fclose(load_fp);
+        if (nread != nvals) {
+            fprintf(stderr, "ERROR (rank %d): short read in %s (got %zu/%zu complex values)\n",
+                    rank, load_filename, nread, nvals);
+            fflush(stderr);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        for (size_t i = 0; i < nread; i++) {
+            loaded_noise_real[i] = tmp[2*i];
+            loaded_noise_imag[i] = tmp[2*i + 1];
+        }
+        free(tmp);
     }
 #endif
 

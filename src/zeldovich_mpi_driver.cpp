@@ -901,9 +901,34 @@ extern "C" int zeldovich_mpi_driver_run(int argc, char **argv)
         fflush(stdout);
     }
 
+#if LOAD_WHITE_NOISE_FROM_FILE
+    // Charlie: check the white noise file choice once up front (shape/fNL or ZD_white_noise_name),
+    // so a bad .par fails here instead of inside slab generation.
+    if (rank == 0) {
+        char wn_prefix[1024], wn_err[512];
+        if (zd_white_noise_path_prefix(params, wn_prefix, sizeof(wn_prefix), wn_err, sizeof(wn_err)) != 0) {
+            fprintf(stderr, "ERROR: %s\n", wn_err);
+            fflush(stderr);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        char wn_first[1100];
+        snprintf(wn_first, sizeof(wn_first), "%s_y.0", wn_prefix);
+        struct stat wn_st;
+        if (stat(wn_first, &wn_st) != 0) {
+            fprintf(stderr, "ERROR: LOAD_WHITE_NOISE_FROM_FILE: no white noise file found at %s "
+                    "(check ZD_f_NL, the ZD_f_NL_<shape> flags, ZD_white_noise_name and ZD_PNG_DIR)\n",
+                    wn_first);
+            fflush(stderr);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        printf("[INIT] Loading white noise from %s_y.{y}\n", wn_prefix);
+        fflush(stdout);
+    }
+#endif
+
     STimer t_gen, t_comm;
     t_gen.Start();
-    
+
     for (int batch_idx = 0; batch_idx < global_max_batches; batch_idx++) {
         // ===== BATCH STEP 1: Get this batch's data =====
         int my_batch_slice_count = 0;

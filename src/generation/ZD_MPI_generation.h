@@ -56,6 +56,15 @@ void generate_zd_mpi_slice_pair_local(
     PowerSpectrumHandle ps_handle_primordial_dimensional, // primordial P(k) handle (NULL if unavailable)
     void** thread_rng_buffers);       // Pre-allocated RNG buffers [nthreads] (NULL = use malloc)
 
+// Charlie: path prefix of the LOAD_WHITE_NOISE_FROM_FILE input (the file is {prefix}_y.{y}).
+// Exactly one nonzero ZD_f_NL_<shape>:  {png_dir}/phi_<shape>_fNL<ZD_f_NL %g>_divided
+//   (the name LOAD_D_FROM_FILE writes). All shapes 0: {png_dir}/<ZD_white_noise_name>
+//   (an absolute name is used as-is).
+// Returns 0 on success; nonzero with a message in err if several shapes are set, no shape and
+// no name is set, or a shape and a name are both set.
+int zd_white_noise_path_prefix(ParametersHandle params_handle, char *buf, size_t len,
+                               char *err, size_t errlen);
+
 // Print accumulated PTimerWall breakdown for Stage 1 sub-phases
 // (generation vs FFT), then reset timers. Call once after the batch loop.
 void print_zd_mpi_gen_timers(int rank);

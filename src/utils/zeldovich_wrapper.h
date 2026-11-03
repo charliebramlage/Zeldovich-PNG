@@ -74,6 +74,11 @@ const char* zeldovich_params_get_Pk_primordial_filename(ParametersHandle params)
 // Valid only while the Parameters object exists.
 const char* zeldovich_params_get_png_dir(ParametersHandle params);
 
+// Custom white-noise file name (ZD_white_noise_name) for LOAD_WHITE_NOISE_FROM_FILE: files are
+// {png_dir}/{name}_y.<y>. Only allowed when all ZD_f_NL_<shape> are 0. NULL if unset.
+// Valid only while the Parameters object exists.
+const char* zeldovich_params_get_white_noise_name(ParametersHandle params);
+
 // Get fundamental wavenumber (2pi/BoxSize)
 double zeldovich_params_get_fundamental(ParametersHandle params);
 
