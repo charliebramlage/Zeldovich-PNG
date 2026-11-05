@@ -72,14 +72,14 @@ int kernel_terms_for(FnlType type, KernelTerm *terms)
         case FNL_ORTHOLSS: {
             double p = 27.0 / (-21.0 + (743.0) / (7.0 * (20.0 * M_PI * M_PI - 193.0)));
             double t = (2.0 + (60.0 * p) / 27.0) / (6.0 * (1.0 + (15.0 * p) / 27.0));
-            terms[n++] = (KernelTerm){KSHAPE_A1, -(1.0 + (9.0 * p) / 27.0)};
-            terms[n++] = (KernelTerm){KSHAPE_C1, -(2.0 + (60.0 * p) / 27.0)};
-            terms[n++] = (KernelTerm){KSHAPE_B1, (1.0 + (15.0 * p) / 27.0) * (1.0 - t)};
-            terms[n++] = (KernelTerm){KSHAPE_B2, (1.0 + (15.0 * p) / 27.0) * t};
-            terms[n++] = (KernelTerm){KSHAPE_D1, p / 27.0};
-            terms[n++] = (KernelTerm){KSHAPE_E2, -(20.0 * p) / 27.0};
-            terms[n++] = (KernelTerm){KSHAPE_F1, 6.0 * p / 27.0};
-            terms[n++] = (KernelTerm){KSHAPE_G1, 15.0 * p / 27.0};
+            terms[n++] = (KernelTerm){KSHAPE_A1, -3.0 * (1.0 + (9.0 * p) / 27.0)};
+            terms[n++] = (KernelTerm){KSHAPE_C1, -3.0 * (2.0 + (60.0 * p) / 27.0)};
+            terms[n++] = (KernelTerm){KSHAPE_B1, 2.0 * 3.0 * (1.0 + (15.0 * p) / 27.0) * (1.0 - t)};
+            terms[n++] = (KernelTerm){KSHAPE_B2, 2.0 * 3.0 * (1.0 + (15.0 * p) / 27.0) * t};
+            terms[n++] = (KernelTerm){KSHAPE_D1, 3.0 * p / 27.0};
+            terms[n++] = (KernelTerm){KSHAPE_E2, -2.0 *3.0 *(20.0 * p) / 27.0};
+            terms[n++] = (KernelTerm){KSHAPE_F1, -2.0 * 3.0 * 6.0 * p / 27.0};
+            terms[n++] = (KernelTerm){KSHAPE_G1, 2.0 * 3.0 * 15.0 * p / 27.0};
             break;
         }
 
