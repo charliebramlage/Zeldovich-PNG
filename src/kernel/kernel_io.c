@@ -3,6 +3,7 @@
 // ====================================================================================
 
 #include "kernel_io.h"
+#include "../utils/png_slice_io.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,72 +12,37 @@
 
 int kernel_detect_N(const char *path)
 {
-    struct stat st;
-    if (stat(path, &st) != 0) return -1;
-    long long n_complex = (long long)st.st_size / (2 * (long long)sizeof(double));
-    if (n_complex * 2 * (long long)sizeof(double) != (long long)st.st_size) return -1;
-    long long N = llround(sqrt((double)n_complex));
-    if (N * N != n_complex) return -1;
-    return (int)N;
+    int N = -1, bytes = 0;
+    return (png_slice_detect(path, &N, &bytes) == 0) ? N : -1;
 }
 
-#ifndef USE_DOUBLE_PRECISION
-// Single precision: files stay float64, so convert through a bounded double buffer
-#define KERNEL_IO_CHUNK ((size_t)1 << 16)   // complex values per chunk (1 MiB of doubles)
-#endif
+int kernel_detect_file_bytes(const char *path)
+{
+    int N = -1, bytes = 0;
+    return (png_slice_detect(path, &N, &bytes) == 0) ? bytes : 0;
+}
 
+// fftw_complex_t is real_t[2], so a slice is layout-compatible with interleaved real_t values.
 int kernel_read_slice(const char *path, int N, fftw_complex_t *slice)
 {
-    FILE *fp = fopen(path, "rb");
-    if (fp == NULL) return 1;
     size_t nvals = (size_t)N * (size_t)N;
 #ifdef USE_DOUBLE_PRECISION
-    // fftw_complex (double precision) is layout-compatible with interleaved doubles
-    size_t nread = fread(slice, 2 * sizeof(double), nvals, fp);
+    int err = png_slice_read_double(path, nvals, (double *)slice);
 #else
-    double *buf = (double*)malloc(KERNEL_IO_CHUNK * 2 * sizeof(double));
-    size_t nread = 0;
-    while (buf != NULL && nread < nvals) {
-        size_t want = (nvals - nread < KERNEL_IO_CHUNK) ? nvals - nread : KERNEL_IO_CHUNK;
-        size_t got = fread(buf, 2 * sizeof(double), want, fp);
-        for (size_t i = 0; i < got; i++) {
-            slice[nread + i][0] = (real_t)buf[2 * i];
-            slice[nread + i][1] = (real_t)buf[2 * i + 1];
-        }
-        nread += got;
-        if (got != want) break;
-    }
-    free(buf);
+    int err = png_slice_read_float(path, nvals, (float *)slice);
 #endif
-    int extra = fgetc(fp);
-    fclose(fp);
-    return (nread == nvals && extra == EOF) ? 0 : 2;
+    return (err == 0) ? 0 : (err == 1 ? 1 : 2);
 }
 
-int kernel_write_slice(const char *path, int N, const fftw_complex_t *slice)
+int kernel_write_slice(const char *path, int N, const fftw_complex_t *slice, int bytes_per_real)
 {
-    FILE *fp = fopen(path, "wb");
-    if (fp == NULL) return 1;
     size_t nvals = (size_t)N * (size_t)N;
 #ifdef USE_DOUBLE_PRECISION
-    size_t nwritten = fwrite(slice, 2 * sizeof(double), nvals, fp);
+    int err = png_slice_write_double(path, nvals, (const double *)slice, bytes_per_real);
 #else
-    double *buf = (double*)malloc(KERNEL_IO_CHUNK * 2 * sizeof(double));
-    size_t nwritten = 0;
-    while (buf != NULL && nwritten < nvals) {
-        size_t want = (nvals - nwritten < KERNEL_IO_CHUNK) ? nvals - nwritten : KERNEL_IO_CHUNK;
-        for (size_t i = 0; i < want; i++) {
-            buf[2 * i]     = (double)slice[nwritten + i][0];
-            buf[2 * i + 1] = (double)slice[nwritten + i][1];
-        }
-        size_t put = fwrite(buf, 2 * sizeof(double), want, fp);
-        nwritten += put;
-        if (put != want) break;
-    }
-    free(buf);
+    int err = png_slice_write_float(path, nvals, (const float *)slice, bytes_per_real);
 #endif
-    int close_err = fclose(fp);
-    return (nwritten == nvals && close_err == 0) ? 0 : 2;
+    return (err == 0) ? 0 : (err == 1 ? 1 : 2);
 }
 
 // Element (x, z) of a [z][x] slice

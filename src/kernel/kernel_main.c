@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     // ==================================================================================
     KernelParams kp;
     memset(&kp, 0, sizeof(kp));
-    int hdr[2] = {0, -1};   // parse status, N
+    int hdr[3] = {0, -1, 0};   // parse status, N, input bytes per real
     if (world_rank == 0) {
         hdr[0] = kernel_params_load(param_file, &kp);
         if (png_dir_arg != NULL && png_dir_arg[0] != '\0') {
@@ -122,8 +122,9 @@ int main(int argc, char **argv)
         char path[4096 + 64];
         snprintf(path, sizeof(path), "%s/Phi_gaussian_y.0", kp.png_dir);
         hdr[1] = kernel_detect_N(path);
+        hdr[2] = kernel_detect_file_bytes(path);
     }
-    MPI_Bcast(hdr, 2, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(hdr, 3, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&kp, sizeof(kp), MPI_BYTE, 0, MPI_COMM_WORLD);
 
     if (hdr[0] != 0) FAIL("cannot read parameter file %s\n", param_file);
@@ -131,7 +132,8 @@ int main(int argc, char **argv)
     const char *png_dir = kp.png_dir;
     const char *out_dir = (out_dir_arg != NULL && out_dir_arg[0] != '\0') ? out_dir_arg : png_dir;
     const int N = hdr[1];
-    if (N <= 0) FAIL("%s/Phi_gaussian_y.0 missing or not N*N complex doubles\n", png_dir);
+    if (N <= 0) FAIL("%s/Phi_gaussian_y.0 missing or not N*N complex float32/float64\n", png_dir);
+    const int out_bytes = kp.file_float64 ? 8 : 4;
     if (N % 2 != 0) FAIL("N=%d must be even\n", N);
     const int num_z_ranks = (int)kp.num_z_ranks;
     if (num_z_ranks <= 0 || num_ranks % num_z_ranks != 0) {
@@ -184,7 +186,8 @@ int main(int argc, char **argv)
                num_ranks, size_x, size_z, omp_get_max_threads());
         printf("  precision=%s, batches=%d, compat=%d, zero_nyquist=%d\n",
                PRECISION_NAME, K.num_batches, compat, zero_nyquist);
-        printf("  in:  %s\n  out: %s\n", png_dir, out_dir);
+        printf("  in:  %s (Phi_gaussian %s)\n  out: %s (kernels written as %s)\n", png_dir,
+               hdr[2] == 4 ? "float32" : "float64", out_dir, out_bytes == 4 ? "float32" : "float64");
         if (debug_term) {
             printf("  term: %s  coef=1\n", kernel_shape((KernelShapeId)only_id)->name);
         } else {
@@ -283,7 +286,7 @@ int main(int argc, char **argv)
             int y_p = kernel_batch_y_p(&K, rank, b);
             char path[4096 + 64];
             snprintf(path, sizeof(path), "%s/kernel_%s_y.%d", out_dir, label, y_p);
-            if (kernel_write_slice(path, N, out[b]) != 0) {
+            if (kernel_write_slice(path, N, out[b], out_bytes) != 0) {
                 fprintf(stderr, "[Kernel_MPI] ERROR: rank %d cannot write %s\n", rank, path);
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }

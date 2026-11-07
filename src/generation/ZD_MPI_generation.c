@@ -2,6 +2,7 @@
 #include "../utils/verification.h"
 #include "../utils/zeldovich_wrapper.h" 
 #include "../utils/plt_eigenmodes.h" 
+#include "../utils/png_slice_io.h"
 #include "../config.h"  
 #include "../precision.h"  
 #include "../PTimer.h"
@@ -398,15 +399,11 @@ void generate_zd_mpi_slice_pair_local(
     }
 
 #if DUMP_GAUSSIAN_D
-FILE *dump_fp = NULL;
 char dump_filename[1024];
 snprintf(dump_filename, sizeof(dump_filename), "%s/Phi_gaussian_y.%d", png_dir, global_y);
-dump_fp = fopen(dump_filename, "wb");
-if (dump_fp == NULL) {
-    fprintf(stderr, "ERROR: Could not open dump file %s\n", dump_filename);
-}
-// File layout (no x,y,z indices stored): N*N complex values as interleaved doubles
-// (real, imag), x fastest, then z. Element (x,z) lives at index z*N + x.
+// File layout (no x,y,z indices stored): N*N complex values as interleaved (real, imag),
+// x fastest, then z. Element (x,z) lives at index z*N + x. Written as float32, or float64 with
+// ZD_PNG_FileFloat64 = 1 (see utils/png_slice_io.h); the buffer here is double either way.
 // Filled inside the (possibly OpenMP-parallel) z-loop, then written once after the loop,
 // so the on-disk order does not depend on thread scheduling.
 double *dump_buf = (double*)malloc((size_t)N * (size_t)N * 2 * sizeof(double));
@@ -452,14 +449,8 @@ if (dump_buf == NULL) {
         }
         char load_filename[1100];
         snprintf(load_filename, sizeof(load_filename), "%s_y.%d", load_prefix, global_y);
-        FILE *load_fp = fopen(load_filename, "rb");
-        if (load_fp == NULL) {
-            fprintf(stderr, "ERROR (rank %d): Could not open %s for reading white noise\n", rank, load_filename);
-            fflush(stderr);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        // File holds N*N interleaved (real, imag) doubles, x fastest then z,
-        // so element i is already at index z*N + x.
+        // File holds N*N interleaved (real, imag) float32 or float64 values (told apart by size),
+        // x fastest then z, so element i is already at index z*N + x.
         size_t nvals = (size_t)N * (size_t)N;
         double *tmp = (double*)malloc(nvals * 2 * sizeof(double));
         if (tmp == NULL || loaded_noise_real == NULL || loaded_noise_imag == NULL) {
@@ -467,15 +458,15 @@ if (dump_buf == NULL) {
             fflush(stderr);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        size_t nread = fread(tmp, 2 * sizeof(double), nvals, load_fp);
-        fclose(load_fp);
-        if (nread != nvals) {
-            fprintf(stderr, "ERROR (rank %d): short read in %s (got %zu/%zu complex values)\n",
-                    rank, load_filename, nread, nvals);
+        int rerr = png_slice_read_double(load_filename, nvals, tmp);
+        if (rerr != 0) {
+            fprintf(stderr, "ERROR (rank %d): could not read white noise %s (%s)\n", rank, load_filename,
+                    rerr == 1 ? "cannot open" : rerr == 2 ? "size is not N*N complex float32 or float64"
+                                                          : "short read");
             fflush(stderr);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        for (size_t i = 0; i < nread; i++) {
+        for (size_t i = 0; i < nvals; i++) {
             loaded_noise_real[i] = tmp[2*i];
             loaded_noise_imag[i] = tmp[2*i + 1];
         }
@@ -932,16 +923,12 @@ if (dump_buf == NULL) {
 //Charlie: added to close the file pointer for dumping the Gaussian density field D
 //Charlie: added to close the file pointer for dumping the Gaussian density field D
 #if DUMP_GAUSSIAN_D
-if (dump_fp != NULL) {
-    if (dump_buf != NULL) {
-        size_t nvals = (size_t)N * (size_t)N;
-        size_t nwritten = fwrite(dump_buf, 2 * sizeof(double), nvals, dump_fp);
-        if (nwritten != nvals) {
-            fprintf(stderr, "ERROR: short write to %s (wrote %zu/%zu complex values)\n",
-                    dump_filename, nwritten, nvals);
-        }
+if (dump_buf != NULL) {
+    int werr = png_slice_write_double(dump_filename, (size_t)N * (size_t)N, dump_buf,
+                                      zeldovich_params_get_png_file_bytes(params_handle));
+    if (werr != 0) {
+        fprintf(stderr, "ERROR: could not write %s (error %d)\n", dump_filename, werr);
     }
-    fclose(dump_fp);
 }
 free(dump_buf);
 #endif
@@ -956,18 +943,12 @@ if (phiG_scaled != NULL && ng_scale != NULL && shape_buf != NULL) {
         char kernel_filename[1024];
         snprintf(kernel_filename, sizeof(kernel_filename), "%s/kernel_%s_y.%d",
                  png_dir, fnl_shape_names[shape], global_y);
-        FILE *kernel_fp = fopen(kernel_filename, "rb");
-        if (kernel_fp == NULL) {
-            fprintf(stderr, "ERROR: Could not open %s for reading kernel; skipping shape %s\n",
-                    kernel_filename, fnl_shape_names[shape]);
-            fflush(stderr);
-            continue;
-        }
-        size_t nread = fread(shape_buf, 2 * sizeof(double), nmodes, kernel_fp);
-        fclose(kernel_fp);
-        if (nread != nmodes) {
-            fprintf(stderr, "ERROR: short read in %s (got %zu/%zu complex values); skipping shape %s\n",
-                    kernel_filename, nread, nmodes, fnl_shape_names[shape]);
+        int kerr = png_slice_read_double(kernel_filename, nmodes, shape_buf);
+        if (kerr != 0) {
+            fprintf(stderr, "ERROR: could not read kernel %s (%s); skipping shape %s\n", kernel_filename,
+                    kerr == 1 ? "cannot open" : kerr == 2 ? "size is not N*N complex float32 or float64"
+                                                          : "short read",
+                    fnl_shape_names[shape]);
             fflush(stderr);
             continue;
         }
@@ -984,16 +965,10 @@ if (phiG_scaled != NULL && ng_scale != NULL && shape_buf != NULL) {
         zd_format_fnl(fnl_str, sizeof(fnl_str), f_NL);
         snprintf(divided_filename, sizeof(divided_filename), "%s/phi_%s_fNL%s_divided_y.%d",
                  png_dir, fnl_shape_names[shape], fnl_str, global_y);
-        FILE *divided_fp = fopen(divided_filename, "wb");
-        if (divided_fp == NULL) {
-            fprintf(stderr, "ERROR: Could not open %s for writing divided phi\n", divided_filename);
-            fflush(stderr);
-            continue;
-        }
-        size_t nwritten = fwrite(shape_buf, 2 * sizeof(double), nmodes, divided_fp);
-        if (fclose(divided_fp) != 0 || nwritten != nmodes) {
-            fprintf(stderr, "ERROR: short write to %s (wrote %zu/%zu complex values)\n",
-                    divided_filename, nwritten, nmodes);
+        int werr = png_slice_write_double(divided_filename, nmodes, shape_buf,
+                                          zeldovich_params_get_png_file_bytes(params_handle));
+        if (werr != 0) {
+            fprintf(stderr, "ERROR: could not write %s (error %d)\n", divided_filename, werr);
             fflush(stderr);
         }
     }

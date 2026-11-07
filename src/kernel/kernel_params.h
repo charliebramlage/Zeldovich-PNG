@@ -16,10 +16,12 @@ typedef struct {
     double pad_M;        // KernelPadM, or -1
     int found[7];        // BoxSize, NumZRanks, 4 x f_NL, KernelPadM
     char png_dir[4096];  // ZD_PNG_DIR, or "png_slices"
+    int file_float64;    // ZD_PNG_FileFloat64: 1 writes kernels as float64, 0 (default) float32
 } KernelParams;
 
 // Keys: BoxSize, NumZRanks, ZD_f_NL_local, ZD_f_NL_equil, ZD_f_NL_orthoCMB,
-// ZD_f_NL_orthoLSS, optional ZD_PNG_DIR (default "png_slices"), optional KernelPadM.
+// ZD_f_NL_orthoLSS, optional ZD_PNG_DIR (default "png_slices"), optional KernelPadM,
+// optional ZD_PNG_FileFloat64 (default 0: write float32).
 // Other keys in the file are ignored. Returns 0 on success, non-zero if the file cannot
 // be read or ZD_PNG_DIR does not fit. Missing keys are reported through found[], not here.
 // A syntax error in the file makes ParseHeader print the error and exit.

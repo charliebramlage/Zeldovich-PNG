@@ -79,6 +79,10 @@ const char* zeldovich_params_get_png_dir(ParametersHandle params);
 // Valid only while the Parameters object exists.
 const char* zeldovich_params_get_white_noise_name(ParametersHandle params);
 
+// Bytes per real number for PNG slice files this run writes (Phi_gaussian, divided phi):
+// 8 if ZD_PNG_FileFloat64 = 1, else 4 (float32, the default). Readers accept either.
+int zeldovich_params_get_png_file_bytes(ParametersHandle params);
+
 // Get fundamental wavenumber (2pi/BoxSize)
 double zeldovich_params_get_fundamental(ParametersHandle params);
 

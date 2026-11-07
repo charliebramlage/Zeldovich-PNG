@@ -129,6 +129,12 @@ const char* zeldovich_params_get_white_noise_name(ParametersHandle params) {
     return p->white_noise_name.c_str();
 }
 
+int zeldovich_params_get_png_file_bytes(ParametersHandle params) {
+    if (!params) return 4;
+    ZeldovichParameters* p = static_cast<ZeldovichParameters*>(params);
+    return p->png_file_float64 ? 8 : 4;
+}
+
 double zeldovich_params_get_f_cluster(ParametersHandle params) {
     if (!params) return 0.0;
     ZeldovichParameters* p = static_cast<ZeldovichParameters*>(params);

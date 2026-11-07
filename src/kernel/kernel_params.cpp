@@ -24,6 +24,7 @@ public:
     double fnl[4] = {std::nan(""), std::nan(""), std::nan(""), std::nan("")};
     double pad_M = std::nan("");
     std::string png_dir = "png_slices";
+    int file_float64 = 0;
 
     KernelParameters() {
         installscalar("BoxSize", box_size, DONT_CARE);
@@ -34,6 +35,7 @@ public:
         installscalar("ZD_f_NL_orthoLSS", fnl[3], DONT_CARE);
         installscalar("KernelPadM", pad_M, DONT_CARE);
         installscalar("ZD_PNG_DIR", png_dir, DONT_CARE);
+        installscalar("ZD_PNG_FileFloat64", file_float64, DONT_CARE);
     }
 };
 
@@ -66,6 +68,7 @@ extern "C" int kernel_params_load(const char *path, KernelParams *kp)
         for (int i = 0; i < 4; i++) set(p.fnl[i], &kp->fnl[i], &kp->found[2 + i]);
         set(p.pad_M, &kp->pad_M, &kp->found[6]);
         if (!kp->found[6]) kp->pad_M = -1.0;
+        kp->file_float64 = p.file_float64 ? 1 : 0;
 
         const std::string dir = p.png_dir.empty() ? std::string("png_slices") : p.png_dir;
         if (dir.size() >= sizeof(kp->png_dir)) return 1;

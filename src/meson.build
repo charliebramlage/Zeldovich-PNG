@@ -32,6 +32,7 @@ _zd_mpi_core_sources = files(
   'utils/batch_helpers.c',
   'utils/decomposition.c',
   'utils/plt_eigenmodes.c',
+  'utils/png_slice_io.c',
   'utils/power_spectrum.c',
   'utils/printing.c',
   'utils/verification.c',
