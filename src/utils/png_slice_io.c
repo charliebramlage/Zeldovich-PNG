@@ -135,6 +135,12 @@ int png_slice_write_float(const char *path, size_t nvals, const float *in, int b
     return write_slice(path, nvals, in, PNG_SLICE_F32, bytes_per_real);
 }
 
+void png_format_fnl(char *buf, size_t len, double f_NL)
+{
+    if (f_NL == floor(f_NL) && fabs(f_NL) < 1e15) snprintf(buf, len, "%.0f", f_NL);
+    else snprintf(buf, len, "%g", f_NL);
+}
+
 const char *png_slice_type_name(int bytes_per_real)
 {
     if (bytes_per_real == PNG_SLICE_F32) return "float32";

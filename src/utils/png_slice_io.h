@@ -50,6 +50,11 @@ int png_slice_write_float(const char *path, size_t nvals, const float *in, int b
 // Human-readable name of an element type: "float32", "float64" or "unknown"
 const char *png_slice_type_name(int bytes_per_real);
 
+// f_NL as it appears in white-noise file names phi_<shape>_fNL<f>_divided_y.<y>: whole numbers as
+// plain integers (100 -> "100", 1e6 -> "1000000", -5 -> "-5"), anything else with %g (0.5 -> "0.5").
+// Used by the load step's writer and reader and by PNG_Combine, and matched by Abacus's reader.
+void png_format_fnl(char *buf, size_t len, double f_NL);
+
 #ifdef __cplusplus
 }
 #endif

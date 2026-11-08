@@ -108,6 +108,17 @@ if not get_option('abacus_embed')
     )
   endif
 
+  # PNG_Combine: white-noise files from Phi_gaussian and the kernels (streaming replacement for the
+  # LOAD_D_FROM_FILE pass; same mask, s(k) and arithmetic). Independent of the dump/load defines.
+  executable(
+    'PNG_Combine',
+    files('png_combine/png_combine_main.cpp'),
+    include_directories: include_directories('utils'),
+    link_with: zeldovich_ic_lib,
+    dependencies: [zd_mpi_common_dep, parseheader_dep],
+    install: true,
+  )
+
   wisdom_inc = include_directories('.', 'fft')
   executable(
     'wisdom_rank0',

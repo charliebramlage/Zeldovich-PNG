@@ -199,15 +199,11 @@ static const char *zd_png_dir(ParametersHandle params_handle) {
     return png_dir;
 }
 
-// f_NL as it appears in white-noise file names: whole numbers as plain integers (100 -> "100",
-// 1e6 -> "1000000", -5 -> "-5"), anything else with %g (0.5 -> "0.5"). Shared by the
-// LOAD_D_FROM_FILE writer and the LOAD_WHITE_NOISE_FROM_FILE reader so the two names always match.
+// f_NL as it appears in white-noise file names (png_format_fnl in utils/png_slice_io.c, also used
+// by PNG_Combine): whole numbers as plain integers (100, 1000000, -5), anything else with %g (0.5).
+// Shared by the LOAD_D_FROM_FILE writer and the LOAD_WHITE_NOISE_FROM_FILE reader.
 static void zd_format_fnl(char *buf, size_t len, double f_NL) {
-    if (f_NL == floor(f_NL) && fabs(f_NL) < 1e15) {
-        snprintf(buf, len, "%.0f", f_NL);
-    } else {
-        snprintf(buf, len, "%g", f_NL);
-    }
+    png_format_fnl(buf, len, f_NL);
 }
 
 int zd_white_noise_path_prefix(ParametersHandle params_handle, char *buf, size_t len,
